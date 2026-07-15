@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { changePin } from "../api";
+import { changePin, downloadBackup } from "../api";
 
 type Props = {
   onBack: () => void;
@@ -13,8 +13,8 @@ type Props = {
  * home screen currently navigates to it except the temporary "Settings"
  * link in App.tsx's placeholder HomeScreen (clearly marked there) — ticket
  * 04's agent should replace that with the real gear icon and route it to
- * this same `{ name: "settings" }` screen. Download-backup and app-version
- * (SPEC.md §8) land here later, in ticket 08.
+ * this same `{ name: "settings" }` screen. App-version (SPEC.md §8) still
+ * lands here later; Download backup was added in ticket 08.
  */
 export default function SettingsScreen({ onBack }: Props) {
   const [currentPin, setCurrentPin] = useState("");
@@ -23,6 +23,20 @@ export default function SettingsScreen({ onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [backupInFlight, setBackupInFlight] = useState(false);
+
+  async function handleDownloadBackup() {
+    setBackupError(null);
+    setBackupInFlight(true);
+    try {
+      const result = await downloadBackup();
+      if (result.error) setBackupError(result.error);
+    } finally {
+      setBackupInFlight(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -108,6 +122,26 @@ export default function SettingsScreen({ onBack }: Props) {
             {submitting ? "Please wait…" : "Change PIN"}
           </button>
         </form>
+      </div>
+
+      <div className="card">
+        <p className="eyebrow">Backup</p>
+        <p className="muted">Download a snapshot of the household database (SPEC.md §8).</p>
+
+        <button
+          className="btn-secondary"
+          type="button"
+          onClick={handleDownloadBackup}
+          disabled={backupInFlight}
+        >
+          {backupInFlight ? "Preparing…" : "Download backup"}
+        </button>
+
+        {backupError && (
+          <p className="muted" role="alert" style={{ color: "var(--leave)" }}>
+            {backupError}
+          </p>
+        )}
       </div>
     </div>
   );

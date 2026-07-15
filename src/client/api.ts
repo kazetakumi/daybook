@@ -202,3 +202,40 @@ export function getWorkerCycles(
     `/api/workers/${id}/cycles${query}`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Backup (ticket 08) — src/server/routes/backup.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/backup — fetches the snapshot as a blob (rather than a plain
+ * `<a href>` navigation) so a 401 can be handled the same way every other
+ * route already is (apiFetch's global "session expired" redirect, see
+ * above) instead of the browser silently rendering an error page in place
+ * of a download. On success, triggers a normal browser file download via a
+ * throwaway object URL and reads the dated filename off the
+ * Content-Disposition header the server sent (see backup.ts) rather than
+ * hardcoding it here.
+ */
+export async function downloadBackup(): Promise<OkOrError> {
+  const res = await apiFetch("/api/backup");
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as OkOrError;
+    return { error: body.error ?? `Download failed (${res.status})` };
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] ?? "daybook-backup.sqlite";
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return { ok: true };
+}

@@ -10,6 +10,7 @@ import { healthRoute } from "./routes/health";
 import { createWorkersRoute } from "./routes/workers";
 import { createPaymentsRoute } from "./routes/payments";
 import { createMarksRoute } from "./routes/marks";
+import { createBackupRoute } from "./routes/backup";
 
 // Creates data/daybook.sqlite (and its six tables from schema.sql) on first
 // run, before the server starts accepting requests.
@@ -30,10 +31,7 @@ app.route("/api", createAuthRoute(getDb())); // ticket 03 — src/server/routes/
 app.route("/api", createWorkersRoute(getDb())); // ticket 04 — src/server/routes/workers.ts (/api/home, /api/workers/*)
 app.route("/api/payments", createPaymentsRoute(getDb())); // ticket 06 — src/server/routes/payments.ts
 app.route("/api/marks", createMarksRoute(getDb())); // ticket 05 — src/server/routes/marks.ts
-
-// Later tickets each own one route file and mount it here, one line apiece
-// — they should never need to touch this file's neighbours:
-// app.route("/api/backup", backupRoute);       // ticket 08 — src/server/routes/backup.ts
+app.route("/api/backup", createBackupRoute(getDb())); // ticket 08 — src/server/routes/backup.ts
 
 // Serve the built client from the same port once it exists (i.e. after
 // `npm run build`). In dev, Vite serves the client on its own port and
