@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WorkerPaneProps } from "./useWorkerCycle";
 import type { CycleEntry } from "../../api";
 import { formatDateYear, formatRupees, formatWindow } from "../../lib/format";
+import { buildShareText, shareSettlementText } from "../../lib/shareText";
 import { getPayments, markPaid } from "./paymentsApi";
 import type { Payment } from "./paymentsApi";
 import "./Settle.css";
@@ -27,6 +28,40 @@ export default function Settle({ worker, current, past, refresh, loadMorePast, h
   const [loadError, setLoadError] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [payingKey, setPayingKey] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    },
+    [],
+  );
+
+  function showToast(message: string) {
+    setToast(message);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
+  }
+
+  /**
+   * Share (SPEC.md §6): builds the plain-English text via ../../lib/shareText
+   * and hands it to navigator.share, falling back to the clipboard (with a
+   * "Copied" toast) when the Web Share API isn't available. `payment` is
+   * only passed for a paid Cycle, so the text's "Paid ₹X on <date>" line is
+   * included exactly then.
+   */
+  async function handleShare(entry: CycleEntry, payment?: Payment) {
+    const text = buildShareText(
+      worker,
+      entry.window,
+      entry.settlement,
+      payment ? { amount: payment.amount, paidOn: payment.paidOn } : null,
+    );
+    const outcome = await shareSettlementText(text);
+    if (outcome === "copied") showToast("Copied");
+    else if (outcome === "unavailable") showToast("Could not share this cycle.");
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +105,13 @@ export default function Settle({ worker, current, past, refresh, loadMorePast, h
     <>
       <div className="pane card">
         <SettlementBreakdown entry={current} quota={worker.paidLeavesPerCycle} />
+        <button
+          className="btn-secondary setl-share"
+          type="button"
+          onClick={() => handleShare(current)}
+        >
+          Share
+        </button>
       </div>
 
       <div className="pane card">
@@ -123,6 +165,14 @@ export default function Settle({ worker, current, past, refresh, loadMorePast, h
                         : `Mark paid — ${formatRupees(entry.settlement.total)}`}
                     </button>
                   )}
+
+                  <button
+                    className="btn-secondary setl-share"
+                    type="button"
+                    onClick={() => handleShare(entry, payment)}
+                  >
+                    Share
+                  </button>
                 </div>
               );
             })}
@@ -141,6 +191,12 @@ export default function Settle({ worker, current, past, refresh, loadMorePast, h
           </p>
         )}
       </div>
+
+      {toast && (
+        <div className="setl-toast" role="status">
+          {toast}
+        </div>
+      )}
     </>
   );
 }
