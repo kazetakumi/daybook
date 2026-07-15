@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { changePin, downloadBackup } from "../api";
+import packageJson from "../../../package.json";
 
 type Props = {
   onBack: () => void;
@@ -13,8 +14,7 @@ type Props = {
  * home screen currently navigates to it except the temporary "Settings"
  * link in App.tsx's placeholder HomeScreen (clearly marked there) — ticket
  * 04's agent should replace that with the real gear icon and route it to
- * this same `{ name: "settings" }` screen. App-version (SPEC.md §8) still
- * lands here later; Download backup was added in ticket 08.
+ * this same `{ name: "settings" }` screen.
  */
 export default function SettingsScreen({ onBack }: Props) {
   const [currentPin, setCurrentPin] = useState("");
@@ -143,6 +143,10 @@ export default function SettingsScreen({ onBack }: Props) {
           </p>
         )}
       </div>
+
+      <p className="muted" style={{ textAlign: "center" }}>
+        Daybook v{packageJson.version}
+      </p>
     </div>
   );
 }

@@ -186,9 +186,7 @@ export default function Details({ worker, current, refresh, onArchived }: Props)
 
       <div className="kv-row">
         <span className="k">Cycle</span>
-        <b>
-          {worker.currentCycleStartDay} → {worker.currentCycleStartDay}
-        </b>
+        <b>Day {worker.currentCycleStartDay}</b>
       </div>
       <div className="kv-row">
         <span className="k" />
