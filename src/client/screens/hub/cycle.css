@@ -1,0 +1,164 @@
+/* Cycle pane styles (ticket 05). Kept in its own file rather than appended
+   to ../../index.css, since the parallel Settle-pane ticket is concurrently
+   adding its own styles there too — this file only ever loads via
+   Cycle.tsx's import, so it can't collide. Class names are namespaced
+   (cal-) for the same reason. All colours reuse the CSS custom properties
+   already defined on :root in index.css (--present, --leave, --off, ...),
+   so light/dark theming and the data-theme override both just work.
+
+   Visual reference: prototype/ui-variants.html Variant C (per SPEC.md §4's
+   "Reference implementation of look/feel" note) — rewritten here, not
+   copied. */
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.cal-nav-btn {
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 6px 4px;
+}
+
+.cal-nav-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cal-nav-label {
+  font-weight: 700;
+  font-size: 14.5px;
+  text-align: center;
+}
+
+.cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.cal-weekdays span {
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.cal-cell {
+  aspect-ratio: 1;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--bg);
+  position: relative;
+}
+
+.cal-cell.cal-blank {
+  visibility: hidden;
+}
+
+.cal-cell.cal-present {
+  background: var(--present-soft);
+  color: var(--present);
+}
+
+.cal-cell.cal-paidLeave {
+  background: var(--leave-soft);
+  color: var(--leave);
+}
+
+.cal-cell.cal-unpaidLeave {
+  background: transparent;
+  color: var(--leave);
+  box-shadow: inset 0 0 0 1.5px var(--leave);
+}
+
+.cal-cell.cal-off {
+  background: var(--off-soft);
+  color: var(--off);
+}
+
+.cal-cell.cal-disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cal-cell.cal-today {
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.cal-cell.cal-unpaidLeave.cal-today {
+  box-shadow:
+    inset 0 0 0 1.5px var(--leave),
+    inset 0 0 0 3.5px var(--ink);
+}
+
+.cal-cell.cal-pending {
+  opacity: 0.55;
+}
+
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.cal-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.cal-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.cal-legend-swatch.cal-present {
+  background: var(--present-soft);
+  box-shadow: inset 0 0 0 1.5px var(--present);
+}
+
+.cal-legend-swatch.cal-paidLeave {
+  background: var(--leave-soft);
+}
+
+.cal-legend-swatch.cal-unpaidLeave {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--leave);
+}
+
+.cal-legend-swatch.cal-off {
+  background: var(--off-soft);
+}
+
+.cal-error {
+  color: var(--leave);
+  font-size: 13px;
+  margin-top: 10px;
+}

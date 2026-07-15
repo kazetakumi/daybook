@@ -1,0 +1,47 @@
+/* "Mark today" P/L/O buttons on Home cards (ticket 05). Own file for the
+   same reason as cycle.css / Settle.css — loads only via MarkTodayButtons's
+   import, so it can't collide with other tickets' concurrent CSS edits.
+   Reuses the --present/--leave/--off custom properties from index.css. */
+
+.mark-today {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mark-today-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 9px 0;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1.5px var(--line);
+}
+
+.mark-today-btn:disabled {
+  opacity: 0.6;
+}
+
+.mark-today-btn.mark-active-present {
+  background: var(--present-soft);
+  color: var(--present);
+  box-shadow: inset 0 0 0 1.5px var(--present);
+}
+
+.mark-today-btn.mark-active-leave {
+  background: var(--leave-soft);
+  color: var(--leave);
+  box-shadow: inset 0 0 0 1.5px var(--leave);
+}
+
+.mark-today-btn.mark-active-off {
+  background: var(--off-soft);
+  color: var(--off);
+  box-shadow: inset 0 0 0 1.5px var(--off);
+}

@@ -4,6 +4,9 @@ import type { HomeCard } from "../api";
 import AddWorkerForm from "./AddWorkerForm";
 import { formatDateYear, formatRupees, formatWindow } from "../lib/format";
 import { todayISO } from "../lib/date";
+import MarkTodayButtons from "./hub/MarkTodayButtons";
+import { getMarks, putMark } from "./hub/marksApi";
+import type { DayMarkState } from "./hub/marksApi";
 
 type Props = {
   onOpenWorker: (workerId: number) => void;
@@ -18,19 +21,25 @@ function avatarColor(id: number): string {
 
 /**
  * Home (SPEC.md §4): one card per active Worker — avatar/initial, name,
- * "x of N leaves used", running cycle amount + window, progress bar; gear
- * → Settings; "+ Add worker" beneath; empty state points at "+ Add worker".
+ * "x of N leaves used", running cycle amount + window, progress bar, and
+ * inline P/L/O "mark today" buttons; gear → Settings; "+ Add worker"
+ * beneath; empty state points at "+ Add worker".
  *
- * Deliberately does NOT include the inline Present/Leave/Off "mark today"
- * buttons from the SPEC's card sketch — that's ticket 05 ("Marking days"),
- * which adds them to the card below the progress bar without needing to
- * touch this file's data flow (it can call GET /api/home itself, or extend
- * this component directly).
+ * The P/L/O buttons (ticket 05, "Marking days") mark *today* directly via
+ * PUT /api/marks/:workerId/today — tapping the currently-active state again
+ * returns the day to Present. Each successful mark re-fetches GET /api/home
+ * so the card's amount and "x of N leaves used" recompute live (server-side,
+ * via computeSettlement) without a page reload.
  */
 export default function HomeScreen({ onOpenWorker, onOpenSettings }: Props) {
   const [cards, setCards] = useState<HomeCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  // Today's mark state per Worker, for highlighting the active P/L/O button.
+  // 'present' (the default) covers both "no mark row" and "not loaded yet" —
+  // Present is always a safe fallback since it's what an unmarked day is.
+  const [todayMarks, setTodayMarks] = useState<Record<number, DayMarkState>>({});
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -40,12 +49,41 @@ export default function HomeScreen({ onOpenWorker, onOpenSettings }: Props) {
         return;
       }
       setCards(body.workers);
+
+      const today = todayISO();
+      Promise.all(
+        body.workers.map((w) =>
+          getMarks(w.id, today, today).then(({ status: s, body: b }) => [
+            w.id,
+            s === 200 && b.marks[0] ? (b.marks[0].state as DayMarkState) : "present",
+          ] as const),
+        ),
+      ).then((entries) => {
+        setTodayMarks(Object.fromEntries(entries));
+      });
     });
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  async function markToday(workerId: number, target: DayMarkState) {
+    const current = todayMarks[workerId] ?? "present";
+    const next = current === target ? "present" : target;
+    setBusyId(workerId);
+    try {
+      const { status, body } = await putMark(workerId, todayISO(), next);
+      if (status !== 200) {
+        setError(body.error ?? "Could not update today.");
+        return;
+      }
+      setTodayMarks((prev) => ({ ...prev, [workerId]: next }));
+      load(); // re-fetch amounts/leavesUsed so the card recomputes live
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <div className="screen">
@@ -77,36 +115,50 @@ export default function HomeScreen({ onOpenWorker, onOpenSettings }: Props) {
 
       {cards !== null &&
         cards.map((card) => (
-          <button
-            key={card.id}
-            className="card worker-card"
-            type="button"
-            onClick={() => onOpenWorker(card.id)}
-          >
-            <div className="head">
-              <span className="avatar" style={{ background: avatarColor(card.id) }}>
-                {card.avatarInitial}
-              </span>
-              <span className="who">
-                <b>{card.name}</b>
-                <span className="sub">
-                  {card.role ? `${card.role} · ` : ""}
-                  {card.leavesUsed} of {card.paidLeavesPerCycle} leaves used
+          <div key={card.id} className="card worker-card">
+            <div
+              className="worker-card-tap"
+              role="button"
+              tabIndex={0}
+              style={{ cursor: "pointer" }}
+              onClick={() => onOpenWorker(card.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenWorker(card.id);
+                }
+              }}
+            >
+              <div className="head">
+                <span className="avatar" style={{ background: avatarColor(card.id) }}>
+                  {card.avatarInitial}
                 </span>
-              </span>
-              <span className="amount">
-                <span className="value money">{formatRupees(card.amount)}</span>
-                <br />
-                <span className="caption">so far · {formatWindow(card.window)}</span>
-              </span>
+                <span className="who">
+                  <b>{card.name}</b>
+                  <span className="sub">
+                    {card.role ? `${card.role} · ` : ""}
+                    {card.leavesUsed} of {card.paidLeavesPerCycle} leaves used
+                  </span>
+                </span>
+                <span className="amount">
+                  <span className="value money">{formatRupees(card.amount)}</span>
+                  <br />
+                  <span className="caption">so far · {formatWindow(card.window)}</span>
+                </span>
+              </div>
+              <div className="progress-track">
+                <span
+                  className="progress-fill"
+                  style={{ width: `${Math.round(card.progress * 100)}%` }}
+                />
+              </div>
             </div>
-            <div className="progress-track">
-              <span
-                className="progress-fill"
-                style={{ width: `${Math.round(card.progress * 100)}%` }}
-              />
-            </div>
-          </button>
+            <MarkTodayButtons
+              current={todayMarks[card.id] ?? "present"}
+              busy={busyId === card.id}
+              onMark={(target) => markToday(card.id, target)}
+            />
+          </div>
         ))}
 
       <button className="add-worker-btn" type="button" onClick={() => setShowAddForm(true)}>
