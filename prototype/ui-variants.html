@@ -1,0 +1,586 @@
+<!-- ============================================================
+  THROWAWAY PROTOTYPE — wayfinder ticket 007 (do not ship)
+  Three structurally different UI variants for the attendance app,
+  switchable via ?variant=A|B|C and the floating rig bar / arrow keys.
+  One command to run: open this file in a browser.
+============================================================ -->
+<title>Attendance UI Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#F7F6F2; --card:#FFFFFF; --ink:#23211C; --muted:#6F6A5E;
+    --line:#E4E1D8; --accent:#D98E04; --accent-ink:#7A5000;
+    --present:#1F8A4C; --present-soft:#E3F2E9;
+    --leave:#C75B12;   --leave-soft:#F9EADF;
+    --off:#4C63C7;     --off-soft:#E7EAF9;
+    --warn:#B7791F;    --warn-soft:#F7EDD8;
+    --rig-h:52px;
+    --shadow:0 1px 3px rgba(35,33,28,.08),0 4px 14px rgba(35,33,28,.06);
+  }
+  @media (prefers-color-scheme: dark){ :root{
+    --bg:#1B1917; --card:#26231F; --ink:#EDEAE3; --muted:#9B958A;
+    --line:#38342E; --accent:#F2A81D; --accent-ink:#F2C46B;
+    --present:#3FBF77; --present-soft:#1E3328;
+    --leave:#F08A45;   --leave-soft:#3A2A1E;
+    --off:#8CA0F5;     --off-soft:#232A45;
+    --warn:#E3B34C;    --warn-soft:#3A3020;
+    --shadow:0 1px 3px rgba(0,0,0,.4);
+  }}
+  :root[data-theme="dark"]{
+    --bg:#1B1917; --card:#26231F; --ink:#EDEAE3; --muted:#9B958A;
+    --line:#38342E; --accent:#F2A81D; --accent-ink:#F2C46B;
+    --present:#3FBF77; --present-soft:#1E3328;
+    --leave:#F08A45;   --leave-soft:#3A2A1E;
+    --off:#8CA0F5;     --off-soft:#232A45;
+    --warn:#E3B34C;    --warn-soft:#3A3020;
+    --shadow:0 1px 3px rgba(0,0,0,.4);
+  }
+  :root[data-theme="light"]{
+    --bg:#F7F6F2; --card:#FFFFFF; --ink:#23211C; --muted:#6F6A5E;
+    --line:#E4E1D8; --accent:#D98E04; --accent-ink:#7A5000;
+    --present:#1F8A4C; --present-soft:#E3F2E9;
+    --leave:#C75B12;   --leave-soft:#F9EADF;
+    --off:#4C63C7;     --off-soft:#E7EAF9;
+    --warn:#B7791F;    --warn-soft:#F7EDD8;
+    --shadow:0 1px 3px rgba(35,33,28,.08),0 4px 14px rgba(35,33,28,.06);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:16px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-tap-highlight-color:transparent;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+  .phone{max-width:420px;margin:0 auto;min-height:100vh;padding-bottom:calc(var(--rig-h) + 84px);position:relative}
+  .money{font-variant-numeric:tabular-nums}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  .eyebrow{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  .statechip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px}
+  .chip-present{background:var(--present-soft);color:var(--present)}
+  .chip-leave{background:var(--leave-soft);color:var(--leave)}
+  .chip-off{background:var(--off-soft);color:var(--off)}
+  .chip-unpaid{background:transparent;color:var(--leave);box-shadow:inset 0 0 0 1.5px var(--leave)}
+  .drift{background:var(--warn-soft);color:var(--warn);border-radius:10px;padding:8px 12px;font-size:13.5px;font-weight:500}
+  button:focus-visible,a:focus-visible{outline:2.5px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+  /* ---------- rig bar (not part of the design) ---------- */
+  .rig{
+    position:fixed;left:0;right:0;bottom:0;height:var(--rig-h);z-index:99;
+    display:flex;align-items:center;justify-content:center;gap:4px;
+    background:#111;color:#fff;font-size:13px;
+  }
+  .rig button{color:#fff;padding:8px 16px;font-size:16px}
+  .rig .lbl{min-width:210px;text-align:center;font-weight:600;letter-spacing:.02em}
+  .rig .note{position:absolute;right:10px;font-size:10px;color:#888;letter-spacing:.08em;text-transform:uppercase}
+  @media (max-width:480px){.rig .note{display:none}}
+
+  /* ---------- shared: settlement rows ---------- */
+  .setl-row{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;gap:10px}
+  .setl-row .l{display:flex;align-items:center;gap:8px;font-size:14.5px}
+  .setl-row .n{color:var(--muted);font-size:13px}
+  .setl-total{display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px solid var(--ink);margin-top:6px;padding-top:10px;font-weight:700;font-size:18px}
+  .setl-exact{font-size:12.5px;color:var(--muted);text-align:right;margin-top:2px}
+  .seg-note{font-size:12.5px;color:var(--muted);padding:2px 0}
+  .paidchip{display:inline-flex;gap:6px;align-items:center;background:var(--present-soft);color:var(--present);font-size:13px;font-weight:600;border-radius:99px;padding:4px 12px}
+  .btn-primary{display:block;width:100%;text-align:center;background:var(--accent);color:#fff;font-weight:700;border-radius:12px;padding:13px;font-size:15.5px}
+  :root[data-theme="dark"] .btn-primary,.btn-primary{color:#1B1300}
+
+  /* ---------- shared: calendar grid ---------- */
+  .cal{width:100%}
+  .cal .dow{display:grid;grid-template-columns:repeat(7,1fr);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:4px}
+  .cal .week{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px}
+  .day{aspect-ratio:1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:13.5px;font-variant-numeric:tabular-nums;position:relative;border:1px solid transparent}
+  .day.out{visibility:hidden}
+  .day.future{color:var(--muted);opacity:.45}
+  .day.present{background:var(--present-soft);color:var(--present)}
+  .day.leave{background:var(--leave-soft);color:var(--leave);font-weight:700}
+  .day.unpaid{background:transparent;box-shadow:inset 0 0 0 1.5px var(--leave);color:var(--leave);font-weight:700}
+  .day.off{background:var(--off-soft);color:var(--off);font-weight:700}
+  .day.today{border:1.5px solid var(--accent)}
+  .day .m{font-size:8.5px;line-height:1;letter-spacing:.04em;text-transform:uppercase;margin-top:1px}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--muted);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  /* ================= VARIANT A — one-thumb feed ================= */
+  .va .top{padding:22px 16px 10px}
+  .va .top h1{font-size:22px;font-weight:800}
+  .va .top .d{color:var(--muted);font-size:14px}
+  .va .wcard{margin:10px 14px;padding:14px}
+  .va .wcard .nm{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .va .wcard .nm b{font-size:16.5px}
+  .va .seg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+  .va .seg button{border:1.5px solid var(--line);border-radius:10px;padding:11px 4px;font-weight:700;font-size:14px;color:var(--muted)}
+  .va .seg button.on-present{background:var(--present);border-color:var(--present);color:#fff}
+  .va .seg button.on-leave{background:var(--leave);border-color:var(--leave);color:#fff}
+  .va .seg button.on-off{background:var(--off);border-color:var(--off);color:#fff}
+  .va .cyc{margin:18px 14px 8px}
+  .va .cycrow{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-bottom:1px solid var(--line)}
+  .va .cycrow:last-child{border-bottom:0}
+  .va .cycrow .sub{color:var(--muted);font-size:12.5px}
+  .va .cycrow .amt{font-weight:700;font-size:16.5px}
+  .va .cycrow .go{color:var(--muted)}
+  .va .manage{display:block;text-align:center;color:var(--accent-ink);font-weight:600;font-size:14px;margin:16px auto;padding:8px}
+  /* A: drill-in sheet */
+  .va .sheet{position:fixed;inset:0;bottom:var(--rig-h);background:var(--bg);z-index:20;overflow-y:auto}
+  .va .sheet .inner{max-width:420px;margin:0 auto;padding:0 14px 40px}
+  .va .sheet .bar{display:flex;align-items:center;gap:6px;padding:14px 0 6px;position:sticky;top:0;background:var(--bg)}
+  .va .sheet .bar button{font-size:15px;color:var(--accent-ink);font-weight:600;padding:6px 10px 6px 0}
+  .va .sheet h2{font-size:20px;font-weight:800;padding:4px 0 12px}
+  .va .sec{padding:14px;margin-bottom:14px}
+  .va .sec h3{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+
+  /* ================= VARIANT B — tab bar app ================= */
+  .vb .appbar{padding:20px 16px 12px;display:flex;justify-content:space-between;align-items:baseline}
+  .vb .appbar h1{font-size:20px;font-weight:800}
+  .vb .appbar .d{color:var(--muted);font-size:13.5px}
+  .vb .tabbar{
+    position:fixed;left:0;right:0;bottom:var(--rig-h);z-index:30;
+    background:var(--card);border-top:1px solid var(--line);
+    display:grid;grid-template-columns:repeat(4,1fr);
+  }
+  .vb .tabbar button{padding:9px 0 11px;font-size:11px;font-weight:600;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:3px}
+  .vb .tabbar button.on{color:var(--accent-ink)}
+  .vb .tabbar .ic{font-size:19px;line-height:1}
+  .vb .list .row{display:flex;align-items:center;justify-content:space-between;padding:14px;margin:0 14px 10px}
+  .vb .list .row b{font-size:16px}
+  .vb .list .row .sub{color:var(--muted);font-size:12.5px}
+  .vb .cycle3{display:flex;gap:4px}
+  .vb .cycle3 button{width:44px;height:44px;border-radius:50%;border:1.5px solid var(--line);font-weight:800;font-size:13px;color:var(--muted)}
+  .vb .cycle3 .on-present{background:var(--present);border-color:var(--present);color:#fff}
+  .vb .cycle3 .on-leave{background:var(--leave);border-color:var(--leave);color:#fff}
+  .vb .cycle3 .on-off{background:var(--off);border-color:var(--off);color:#fff}
+  .vb .wchips{display:flex;gap:8px;padding:2px 14px 12px;overflow-x:auto}
+  .vb .wchips button{border:1.5px solid var(--line);border-radius:99px;padding:7px 16px;font-weight:600;font-size:14px;color:var(--muted);white-space:nowrap}
+  .vb .wchips button.on{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+  .vb .calcard{margin:0 14px;padding:14px}
+  .vb .receipt{
+    margin:0 14px;padding:20px 18px;
+    font-family:Georgia,"Times New Roman",serif;
+    background:var(--card);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);
+  }
+  .vb .receipt h2{font-size:17px;font-weight:700;text-align:center;letter-spacing:.02em}
+  .vb .receipt .win{text-align:center;color:var(--muted);font-size:13px;margin:2px 0 12px}
+  .vb .receipt .rl{border-top:1px dashed var(--line);margin:10px 0}
+  .vb .hist{margin:18px 14px 0}
+  .vb .hist .hrow{padding:12px 14px;margin-bottom:10px}
+  .vb .hist .hrow .t{display:flex;justify-content:space-between;font-weight:600;font-size:14.5px}
+  .vb .hist .hrow .s{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .vb .wform{margin:0 14px;padding:14px}
+  .vb .wform label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px;letter-spacing:.04em;text-transform:uppercase}
+  .vb .wform input{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+  .vb .wrow{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;margin:0 14px 10px}
+  .vb .wrow .sub{color:var(--muted);font-size:12.5px}
+  .vb .arch{color:var(--muted);font-size:13px;font-weight:600}
+
+  /* ================= VARIANT C — worker-card hub ================= */
+  .vc .top{padding:22px 16px 8px}
+  .vc .top h1{font-size:22px;font-weight:800}
+  .vc .top .d{color:var(--muted);font-size:14px}
+  .vc .hcard{margin:12px 14px;padding:16px;display:block;width:calc(100% - 28px);text-align:left}
+  .vc .hcard .hd{display:flex;align-items:center;gap:12px}
+  .vc .av{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;color:#fff;flex:none}
+  .vc .hcard .who b{font-size:17px;display:block}
+  .vc .hcard .who .sub{color:var(--muted);font-size:12.5px}
+  .vc .hcard .amt{margin-left:auto;text-align:right}
+  .vc .hcard .amt .v{font-weight:800;font-size:18px}
+  .vc .hcard .amt .s{color:var(--muted);font-size:11px}
+  .vc .prog{height:5px;border-radius:99px;background:var(--line);margin:13px 0 10px;overflow:hidden}
+  .vc .prog i{display:block;height:100%;background:var(--accent);border-radius:99px}
+  .vc .mark3{display:flex;gap:6px;align-items:center}
+  .vc .mark3 .cap{font-size:12px;color:var(--muted);font-weight:600;margin-right:auto}
+  .vc .mark3 button{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--line);font-weight:800;font-size:12.5px;color:var(--muted)}
+  .vc .mark3 .on-present{background:var(--present);border-color:var(--present);color:#fff}
+  .vc .mark3 .on-leave{background:var(--leave);border-color:var(--leave);color:#fff}
+  .vc .mark3 .on-off{background:var(--off);border-color:var(--off);color:#fff}
+  .vc .addw{display:block;margin:14px auto;color:var(--accent-ink);font-weight:600;font-size:14px;padding:8px}
+  /* C: hub */
+  .vc .hub .bar{display:flex;align-items:center;gap:6px;padding:16px 14px 4px}
+  .vc .hub .bar button{font-size:15px;color:var(--accent-ink);font-weight:600;padding:6px 10px 6px 0}
+  .vc .hub .hd2{display:flex;align-items:center;gap:12px;padding:8px 16px 14px}
+  .vc .hub .hd2 h2{font-size:20px;font-weight:800}
+  .vc .hub .hd2 .sub{color:var(--muted);font-size:13px}
+  .vc .segc{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--card);border:1px solid var(--line);border-radius:11px;margin:0 14px 14px;padding:3px}
+  .vc .segc button{padding:8px 0;font-weight:600;font-size:13.5px;border-radius:8px;color:var(--muted)}
+  .vc .segc button.on{background:var(--ink);color:var(--bg)}
+  .vc .pane{margin:0 14px;padding:14px}
+  .vc .kv{display:flex;justify-content:space-between;padding:11px 2px;border-bottom:1px solid var(--line);font-size:14.5px}
+  .vc .kv:last-child{border-bottom:0}
+  .vc .kv .k{color:var(--muted)}
+</style>
+
+<div id="app" class="phone" aria-live="polite"></div>
+
+<div class="rig" role="toolbar" aria-label="Prototype variant switcher">
+  <button id="rprev" aria-label="Previous variant">←</button>
+  <span class="lbl" id="rlbl"></span>
+  <button id="rnext" aria-label="Next variant">→</button>
+  <span class="note">prototype rig</span>
+</div>
+
+<script>
+/* ============ fake data (shared across variants) ============ */
+const TODAY = '2026-07-15';
+const workers = [
+  { id:1, name:'Lakshmi', role:'Maid', joined:'2025-11-01', archived:null, quota:2,
+    ratePeriods:[{from:'2025-11-01', rate:250}],
+    cycleStartDay:1, color:'#C75B12' },
+  { id:2, name:'Ravi', role:'Cook', joined:'2026-03-10', archived:null, quota:2,
+    ratePeriods:[{from:'2026-03-10', rate:280},{from:'2026-07-01', rate:300}],
+    cycleStartDay:10, color:'#4C63C7' },
+];
+const marks = {
+  1:{ '2026-06-04':'leave','2026-06-18':'leave','2026-06-25':'off','2026-06-28':'leave',
+      '2026-07-03':'leave','2026-07-11':'off' },
+  2:{ '2026-06-15':'leave','2026-07-12':'leave','2026-07-14':'leave' },
+};
+const payments = [
+  { workerId:1, start:'2026-06-01', end:'2026-06-30', amount:7250, paidOn:'2026-07-01' },
+  { workerId:2, start:'2026-06-10', end:'2026-07-09', amount:8580, paidOn:'2026-07-09' },
+];
+
+/* ============ date helpers ============ */
+const P = s => { const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
+const F = dt => dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+const addD = (s,n)=>{ const d=P(s); d.setDate(d.getDate()+n); return F(d); };
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtD = s => { const d=P(s); return MON[d.getMonth()]+' '+d.getDate(); };
+const fmtDY = s => { const d=P(s); return MON[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear(); };
+const fmtWin = w => fmtD(w.start)+' – '+fmtD(w.end);
+const rupee = n => '₹' + n.toLocaleString('en-IN', {maximumFractionDigits:2});
+
+/* ============ domain: cycles + computeSettlement ============ */
+function currentCycle(w, ref=TODAY){
+  const r=P(ref), D=w.cycleStartDay;
+  let start = new Date(r.getFullYear(), r.getMonth(), D);
+  if(r.getDate() < D) start = new Date(r.getFullYear(), r.getMonth()-1, D);
+  let s = F(start);
+  const e = F(new Date(start.getFullYear(), start.getMonth()+1, D)); // first day of next cycle
+  let endS = addD(e,-1);
+  if(s < w.joined) s = w.joined;               // stub after joining
+  return {start:s, end:endS};
+}
+function prevCycle(w){
+  const c = currentCycle(w);
+  const prevEnd = addD(c.start,-1);
+  if(prevEnd < w.joined) return null;
+  return currentCycle(w, prevEnd);
+}
+function rateOn(w, date){
+  let r = w.ratePeriods[0].rate;
+  for(const p of w.ratePeriods) if(p.from <= date) r = p.rate;
+  return r;
+}
+function computeSettlement(w, win){
+  const wm = marks[w.id] || {};
+  const upto = win.end < TODAY ? win.end : TODAY;   // future days not counted yet
+  const leaves = [];
+  let d = win.start;
+  while(d <= upto){ if(wm[d]==='leave') leaves.push(d); d = addD(d,1); }
+  const paidSet = new Set(leaves.slice(0, w.quota));   // earliest by calendar date
+  const counts = {present:0, paidLeave:0, unpaidLeave:0, off:0};
+  const segs = {};                                     // rate → paise-equivalent sum
+  let exact = 0;
+  d = win.start;
+  while(d <= upto){
+    const st = wm[d];
+    const rt = rateOn(w,d);
+    let f = 1, key='present';
+    if(st==='leave'){ if(paidSet.has(d)){ key='paidLeave'; f=1; } else { key='unpaidLeave'; f=0; } }
+    else if(st==='off'){ key='off'; f=0.5; }
+    counts[key]++;
+    exact += f*rt;
+    segs[rt]=(segs[rt]||0)+f*rt;
+    d = addD(d,1);
+  }
+  return { counts, exact, total: Math.ceil(exact), segs,
+           daysCounted: Math.round((P(upto)-P(win.start))/864e5)+1,
+           open: win.end >= TODAY };
+}
+function paymentFor(w, win){
+  return payments.find(p=>p.workerId===w.id && p.start===win.start && p.end===win.end) || null;
+}
+
+/* ============ shared render pieces ============ */
+const STATES=[null,'leave','off']; // tap-to-cycle: Present → Leave → Off → Present
+function cycleMark(wid, date){
+  const wm = marks[wid] || (marks[wid]={});
+  const cur = wm[date]===undefined?null:wm[date];
+  const nxt = STATES[(STATES.indexOf(cur)+1)%3];
+  if(nxt===null) delete wm[date]; else wm[date]=nxt;
+  render();
+}
+function stateOf(wid,date){ return (marks[wid]||{})[date] || 'present'; }
+
+function calGrid(w, win, interactive){
+  const wm = marks[w.id]||{};
+  const first = P(win.start);
+  const lead = (first.getDay()+6)%7; // Monday-first
+  let html = '<div class="cal"><div class="dow"><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span></div>';
+  let d = addD(win.start, -lead);
+  const leaves=[]; let t=win.start;
+  while(t<=win.end && t<=TODAY){ if(wm[t]==='leave') leaves.push(t); t=addD(t,1); }
+  const paidSet = new Set(leaves.slice(0,w.quota));
+  while(d <= win.end){
+    html += '<div class="week">';
+    for(let i=0;i<7;i++){
+      const inWin = d>=win.start && d<=win.end;
+      const dt = P(d);
+      let cls='day', mm='';
+      if(!inWin) cls+=' out';
+      else if(d>TODAY) cls+=' future';
+      else{
+        const st=wm[d];
+        if(st==='leave'){ cls += paidSet.has(d)?' leave':' unpaid'; mm = paidSet.has(d)?'L':'UL'; }
+        else if(st==='off'){ cls+=' off'; mm='O'; }
+        else cls+=' present';
+      }
+      if(d===TODAY && inWin) cls+=' today';
+      const tag = (interactive && inWin && d<=TODAY)
+        ? `<button class="${cls}" onclick="cycleMark(${w.id},'${d}')">${dt.getDate()}${mm?`<span class="m">${mm}</span>`:''}</button>`
+        : `<div class="${cls}">${inWin?dt.getDate():''}${mm?`<span class="m">${mm}</span>`:''}</div>`;
+      html += tag;
+      d = addD(d,1);
+    }
+    html += '</div>';
+  }
+  html += `</div><div class="legend">
+    <span><i style="background:var(--present-soft)"></i>Present</span>
+    <span><i style="background:var(--leave-soft)"></i>Paid leave</span>
+    <span><i style="box-shadow:inset 0 0 0 1.5px var(--leave)"></i>Unpaid leave</span>
+    <span><i style="background:var(--off-soft)"></i>Off (half pay)</span></div>
+    ${interactive?'<div class="seg-note" style="margin-top:6px">Tap a day to cycle: Present → Leave → Off.</div>':''}`;
+  return html;
+}
+
+/* amounts per category, computed directly */
+function categoryAmounts(w, win){
+  const wm=marks[w.id]||{}, upto = win.end<TODAY?win.end:TODAY;
+  const leaves=[]; let d=win.start;
+  while(d<=upto){ if(wm[d]==='leave') leaves.push(d); d=addD(d,1); }
+  const paidSet=new Set(leaves.slice(0,w.quota));
+  const a={present:0,paidLeave:0,unpaidLeave:0,off:0};
+  d=win.start;
+  while(d<=upto){
+    const st=wm[d], rt=rateOn(w,d);
+    if(st==='leave'){ if(paidSet.has(d)) a.paidLeave+=rt; }
+    else if(st==='off') a.off+=rt/2;
+    else a.present+=rt;
+    d=addD(d,1);
+  }
+  return a;
+}
+function settlementBlock(w, win, opts={}){
+  const s = computeSettlement(w, win);
+  const a = categoryAmounts(w, win);
+  const pay = paymentFor(w, win);
+  const multiRate = Object.keys(s.segs).length>1;
+  let h = '';
+  h += `<div class="setl-row"><span class="l"><span class="statechip chip-present">Present</span><span class="n">× ${s.counts.present}</span></span><b class="money">${rupee(a.present)}</b></div>`;
+  h += `<div class="setl-row"><span class="l"><span class="statechip chip-leave">Paid leave</span><span class="n">× ${s.counts.paidLeave} of ${w.quota}</span></span><b class="money">${rupee(a.paidLeave)}</b></div>`;
+  h += `<div class="setl-row"><span class="l"><span class="statechip chip-unpaid">Unpaid leave</span><span class="n">× ${s.counts.unpaidLeave}</span></span><b class="money">₹0</b></div>`;
+  h += `<div class="setl-row"><span class="l"><span class="statechip chip-off">Off — half pay</span><span class="n">× ${s.counts.off}</span></span><b class="money">${rupee(a.off)}</b></div>`;
+  if(multiRate){
+    h += `<div class="seg-note">Rate changed during this cycle: ${
+      Object.entries(s.segs).map(([r,amt])=>rupee(Number(r))+'/day → '+rupee(amt)).join(' · ')}</div>`;
+  }
+  h += `<div class="setl-total"><span>${s.open?'So far':'Total'}</span><span class="money">${rupee(s.total)}</span></div>`;
+  if(s.total !== s.exact) h += `<div class="setl-exact money">exact ${rupee(s.exact)}, rounded up</div>`;
+  if(pay){
+    h += `<div style="margin-top:12px"><span class="paidchip">✓ Paid ${rupee(pay.amount)} on ${fmtD(pay.paidOn)}</span></div>`;
+    if(pay.amount !== s.total)
+      h += `<div class="drift" style="margin-top:8px">Drift: computed ${rupee(s.total)}, paid ${rupee(pay.amount)} — days were edited after payday.</div>`;
+  } else if(!s.open && opts.allowPay){
+    h += `<button class="btn-primary" style="margin-top:12px" onclick="markPaid(${w.id},'${win.start}','${win.end}',${s.total})">Mark paid — ${rupee(s.total)}</button>`;
+  }
+  return h;
+}
+function markPaid(wid, start, end, amount){
+  payments.push({workerId:wid, start, end, amount, paidOn:TODAY});
+  render();
+}
+
+/* ============ variant A — one-thumb feed ============ */
+const va = {
+  name:'A — One-thumb feed',
+  state:{ sheet:null },
+  render(){
+    const st = this.state;
+    if(st.sheet){
+      const w = workers.find(x=>x.id===st.sheet);
+      const win = currentCycle(w);
+      return `<div class="va"><div class="sheet"><div class="inner">
+        <div class="bar"><button onclick="va.state.sheet=null;render()">‹ Back</button></div>
+        <h2>${w.name} · ${fmtWin(win)}</h2>
+        <div class="sec card"><h3>Cycle calendar</h3>${calGrid(w,win,true)}</div>
+        <div class="sec card"><h3>Settlement</h3>${settlementBlock(w,win)}</div>
+        <div class="sec card"><h3>Last cycle</h3>${(()=>{const p=prevCycle(w);return p?`<div class="seg-note" style="margin-bottom:6px">${fmtWin(p)}</div>`+settlementBlock(w,p,{allowPay:true}):'—';})()}</div>
+      </div></div></div>`;
+    }
+    return `<div class="va">
+      <div class="top"><div class="eyebrow">Attendance</div><h1>Today</h1><div class="d">${fmtDY(TODAY)}</div></div>
+      ${workers.map(w=>{
+        const s = stateOf(w.id,TODAY);
+        return `<div class="wcard card">
+          <div class="nm"><b>${w.name}</b><span class="seg-note">${w.role} · ${rupee(rateOn(w,TODAY))}/day</span></div>
+          <div class="seg">
+            <button class="${s==='present'?'on-present':''}" onclick="setMark(${w.id},null)">Present</button>
+            <button class="${s==='leave'?'on-leave':''}" onclick="setMark(${w.id},'leave')">Leave</button>
+            <button class="${s==='off'?'on-off':''}" onclick="setMark(${w.id},'off')">Off</button>
+          </div></div>`;
+      }).join('')}
+      <div class="cyc"><div class="eyebrow" style="margin-bottom:8px">This cycle</div>
+      <div class="card">${workers.map(w=>{
+        const win=currentCycle(w), s=computeSettlement(w,win);
+        return `<button class="cycrow" style="width:100%;text-align:left" onclick="va.state.sheet=${w.id};render()">
+          <span><b>${w.name}</b><div class="sub">${fmtWin(win)} · ${s.counts.paidLeave+s.counts.unpaidLeave} leaves, ${s.counts.off} off</div></span>
+          <span style="display:flex;align-items:center;gap:8px"><span class="amt money">${rupee(s.total)}</span><span class="go">›</span></span>
+        </button>`;
+      }).join('')}</div></div>
+      <button class="manage">Manage workers</button>
+    </div>`;
+  }
+};
+function setMark(wid, st){
+  const wm = marks[wid]||(marks[wid]={});
+  if(st===null) delete wm[TODAY]; else wm[TODAY]=st;
+  render();
+}
+
+/* ============ variant B — tab bar app ============ */
+const vb = {
+  name:'B — Tab bar app',
+  state:{ tab:'today', worker:1 },
+  render(){
+    const st=this.state;
+    const w = workers.find(x=>x.id===st.worker);
+    const win = currentCycle(w);
+    let body='';
+    if(st.tab==='today'){
+      body = `<div class="list">${workers.map(x=>{
+        const s=stateOf(x.id,TODAY);
+        return `<div class="row card"><span><b>${x.name}</b><div class="sub">${x.role} · ${rupee(rateOn(x,TODAY))}/day</div></span>
+          <span class="cycle3">
+            <button class="${s==='present'?'on-present':''}" onclick="setMark(${x.id},null)" aria-label="Present">P</button>
+            <button class="${s==='leave'?'on-leave':''}" onclick="setMark(${x.id},'leave')" aria-label="Leave">L</button>
+            <button class="${s==='off'?'on-off':''}" onclick="setMark(${x.id},'off')" aria-label="Off">O</button>
+          </span></div>`;
+      }).join('')}</div>`;
+    }
+    if(st.tab==='cal'){
+      body = `<div class="wchips">${workers.map(x=>`<button class="${x.id===st.worker?'on':''}" onclick="vb.state.worker=${x.id};render()">${x.name}</button>`).join('')}</div>
+        <div class="calcard card"><div class="seg-note" style="margin-bottom:8px">${fmtWin(win)}</div>${calGrid(w,win,true)}</div>`;
+    }
+    if(st.tab==='setl'){
+      const p = prevCycle(w);
+      body = `<div class="wchips">${workers.map(x=>`<button class="${x.id===st.worker?'on':''}" onclick="vb.state.worker=${x.id};render()">${x.name}</button>`).join('')}</div>
+        <div class="receipt"><h2>${w.name}</h2><div class="win">${fmtWin(win)} · running</div><div class="rl"></div>${settlementBlock(w,win)}</div>
+        <div class="hist"><div class="eyebrow" style="margin-bottom:8px">History</div>
+        ${p?`<div class="hrow card">${(()=>{const s=computeSettlement(w,p);const pay=paymentFor(w,p);
+          return `<div class="t"><span>${fmtWin(p)}</span><span class="money">${rupee(s.total)}</span></div>
+          <div class="s">${pay?`Paid ${rupee(pay.amount)} on ${fmtD(pay.paidOn)}`:'Not yet paid'}</div>
+          ${pay&&pay.amount!==s.total?`<div class="drift" style="margin-top:8px">Computed ${rupee(s.total)} / paid ${rupee(pay.amount)} — edited after payday.</div>`:''}
+          ${!pay?`<button class="btn-primary" style="margin-top:10px" onclick="markPaid(${w.id},'${p.start}','${p.end}',${s.total})">Mark paid — ${rupee(s.total)}</button>`:''}`;})()}
+        </div>`:''}</div>`;
+    }
+    if(st.tab==='workers'){
+      body = `${workers.map(x=>`<div class="wrow card"><span><b>${x.name}</b><div class="sub">${x.role} · ${rupee(rateOn(x,TODAY))}/day · cycle ${x.cycleStartDay} → ${x.cycleStartDay} · ${x.quota} paid leaves</div></span><button class="arch">Archive</button></div>`).join('')}
+      <div class="wform card"><div class="eyebrow">Add worker</div>
+        <label>Name</label><input placeholder="e.g. Sunita">
+        <label>Rate (₹ per day)</label><input inputmode="numeric" placeholder="250">
+        <label>Cycle start day (1–28)</label><input inputmode="numeric" placeholder="1">
+        <label>Paid leaves per cycle</label><input inputmode="numeric" value="2">
+        <button class="btn-primary" style="margin-top:14px">Add worker</button></div>`;
+    }
+    const tabs=[['today','☑','Today'],['cal','▤','Calendar'],['setl','₹','Settle'],['workers','☰','Workers']];
+    return `<div class="vb">
+      <div class="appbar"><h1>${tabs.find(t=>t[0]===st.tab)[2]}</h1><span class="d">${fmtDY(TODAY)}</span></div>
+      ${body}
+      <div class="tabbar">${tabs.map(t=>`<button class="${st.tab===t[0]?'on':''}" onclick="vb.state.tab='${t[0]}';render()"><span class="ic">${t[1]}</span>${t[2]}</button>`).join('')}</div>
+    </div>`;
+  }
+};
+
+/* ============ variant C — worker-card hub ============ */
+const vc = {
+  name:'C — Worker-card hub',
+  state:{ hub:null, pane:'cycle' },
+  render(){
+    const st=this.state;
+    if(st.hub){
+      const w=workers.find(x=>x.id===st.hub), win=currentCycle(w), p=prevCycle(w);
+      let pane='';
+      if(st.pane==='cycle') pane = `<div class="pane card">${calGrid(w,win,true)}</div>`;
+      if(st.pane==='setl') pane = `<div class="pane card">${settlementBlock(w,win)}</div>
+        ${p?`<div class="pane card" style="margin-top:12px"><div class="eyebrow" style="margin-bottom:6px">Last cycle · ${fmtWin(p)}</div>${settlementBlock(w,p,{allowPay:true})}</div>`:''}`;
+      if(st.pane==='details') pane = `<div class="pane card">
+        <div class="kv"><span class="k">Rate</span><b class="money">${rupee(rateOn(w,TODAY))} / day</b></div>
+        <div class="kv"><span class="k">Cycle</span><b>${w.cycleStartDay} → ${w.cycleStartDay}</b></div>
+        <div class="kv"><span class="k">Paid leaves per cycle</span><b>${w.quota}</b></div>
+        <div class="kv"><span class="k">Joined</span><b>${fmtDY(w.joined)}</b></div>
+        <div class="kv"><span class="k">Change rate…</span><span class="seg-note">effective from a date</span></div>
+        <div class="kv"><span class="k" style="color:var(--leave)">Archive worker</span><span></span></div></div>`;
+      return `<div class="vc"><div class="hub">
+        <div class="bar"><button onclick="vc.state.hub=null;render()">‹ Workers</button></div>
+        <div class="hd2"><span class="av" style="background:${w.color}">${w.name[0]}</span>
+          <span><h2>${w.name}</h2><span class="sub">${fmtWin(win)}</span></span></div>
+        <div class="segc">
+          <button class="${st.pane==='cycle'?'on':''}" onclick="vc.state.pane='cycle';render()">Cycle</button>
+          <button class="${st.pane==='setl'?'on':''}" onclick="vc.state.pane='setl';render()">Settle</button>
+          <button class="${st.pane==='details'?'on':''}" onclick="vc.state.pane='details';render()">Details</button>
+        </div>${pane}</div></div>`;
+    }
+    return `<div class="vc">
+      <div class="top"><div class="eyebrow">Household</div><h1>Workers</h1><div class="d">${fmtDY(TODAY)}</div></div>
+      ${workers.map(w=>{
+        const win=currentCycle(w), s=computeSettlement(w,win), cur=stateOf(w.id,TODAY);
+        const total=Math.round((P(win.end)-P(win.start))/864e5)+1;
+        const done=Math.round((P(TODAY)-P(win.start))/864e5)+1;
+        return `<div class="hcard card">
+          <button class="hd" style="display:flex;width:100%;text-align:left" onclick="vc.state.hub=${w.id};vc.state.pane='cycle';render()">
+            <span class="av" style="background:${w.color}">${w.name[0]}</span>
+            <span class="who"><b>${w.name}</b><span class="sub">${w.role} · ${s.counts.paidLeave+s.counts.unpaidLeave} of ${w.quota} leaves used</span></span>
+            <span class="amt"><span class="v money">${rupee(s.total)}</span><br><span class="s">so far · ${fmtWin(win)}</span></span>
+          </button>
+          <div class="prog"><i style="width:${Math.min(100,Math.round(done/total*100))}%"></i></div>
+          <div class="mark3"><span class="cap">Today</span>
+            <button class="${cur==='present'?'on-present':''}" onclick="setMark(${w.id},null)" aria-label="Present">P</button>
+            <button class="${cur==='leave'?'on-leave':''}" onclick="setMark(${w.id},'leave')" aria-label="Leave">L</button>
+            <button class="${cur==='off'?'on-off':''}" onclick="setMark(${w.id},'off')" aria-label="Off">O</button>
+          </div></div>`;
+      }).join('')}
+      <button class="addw">+ Add worker</button>
+    </div>`;
+  }
+};
+
+/* ============ rig: variant switching ============ */
+const variants = {A:va, B:vb, C:vc};
+const keys = ['A','B','C'];
+function curKey(){
+  const k = new URLSearchParams(location.search).get('variant');
+  return keys.includes(k) ? k : 'A';
+}
+function go(k){
+  const u = new URL(location); u.searchParams.set('variant', k);
+  history.replaceState(null,'',u);
+  render();
+}
+function step(n){ go(keys[(keys.indexOf(curKey())+n+3)%3]); }
+document.getElementById('rprev').onclick = ()=>step(-1);
+document.getElementById('rnext').onclick = ()=>step(1);
+addEventListener('keydown', e=>{
+  const t = e.target;
+  if(t && (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable)) return;
+  if(e.key==='ArrowLeft') step(-1);
+  if(e.key==='ArrowRight') step(1);
+});
+function render(){
+  const v = variants[curKey()];
+  document.getElementById('app').innerHTML = v.render();
+  document.getElementById('rlbl').textContent = v.name;
+}
+render();
+</script>
