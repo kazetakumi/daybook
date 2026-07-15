@@ -194,3 +194,287 @@ h3 {
   font-size: 14px;
   padding: 8px 0;
 }
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--leave);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+/* ---------- Home: top bar + worker cards ---------- */
+.top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 6px 0 4px;
+}
+
+.top-row h1 {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 18px;
+  flex: none;
+}
+
+.icon-btn:hover {
+  background: var(--line);
+}
+
+.worker-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+.worker-card .head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 17px;
+  color: #fff;
+  flex: none;
+}
+
+.worker-card .who {
+  min-width: 0;
+}
+
+.worker-card .who b {
+  font-size: 17px;
+  display: block;
+}
+
+.worker-card .who .sub {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.worker-card .amount {
+  margin-left: auto;
+  text-align: right;
+  flex: none;
+}
+
+.worker-card .amount .value {
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.worker-card .amount .caption {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.progress-track {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--line);
+  margin: 13px 0 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 99px;
+}
+
+.add-worker-btn {
+  display: block;
+  margin: 6px auto 4px;
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--muted);
+}
+
+.empty-state p:first-child {
+  color: var(--ink);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+/* ---------- Worker hub ---------- */
+.hub-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.hub-header h2 {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.hub-header .sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.segmented button {
+  padding: 8px 0;
+  font-weight: 600;
+  font-size: 13.5px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.segmented button[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.pane {
+  padding: 14px;
+}
+
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14.5px;
+}
+
+.kv-row:last-child {
+  border-bottom: 0;
+}
+
+.kv-row .k {
+  color: var(--muted);
+}
+
+.inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 2px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inline-form label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.inline-form input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.inline-form .hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.inline-form .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.inline-form .actions .btn-primary {
+  flex: 1;
+}
+
+/* ---------- Modals (Add worker, confirm dialogs) ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+  padding: 0;
+}
+
+@media (min-width: 480px) {
+  .modal-backdrop {
+    align-items: center;
+    padding: 16px;
+  }
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--card);
+  border-radius: 16px 16px 0 0;
+  padding: 18px 16px 24px;
+  box-shadow: var(--shadow);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+@media (min-width: 480px) {
+  .modal-card {
+    border-radius: 16px;
+  }
+}
+
+.modal-card h2 {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.modal-card .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

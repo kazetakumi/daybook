@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { SHARED_OK } from "../shared";
 import { getAuthSession, getAuthStatus, setUnauthorizedHandler } from "./api";
+import HomeScreen from "./screens/HomeScreen";
 import PinScreen from "./screens/PinScreen";
 import SettingsScreen from "./screens/SettingsScreen";
+import WorkerHub from "./screens/hub/WorkerHub";
 
 // Proves src/shared resolves cleanly from the client side (Vite/DOM). See
 // src/server/db.ts for the server-side (Node/tsx) half of this check.
@@ -85,7 +87,7 @@ export default function App() {
           />
         )}
         {authReady && screen.name === "worker" && (
-          <WorkerScreen workerId={screen.workerId} onBack={() => setScreen({ name: "home" })} />
+          <WorkerHub workerId={screen.workerId} onBack={() => setScreen({ name: "home" })} />
         )}
         {authReady && screen.name === "settings" && (
           <SettingsScreen onBack={() => setScreen({ name: "home" })} />
@@ -93,71 +95,4 @@ export default function App() {
       </main>
     </div>
   );
-}
-
-function HomeScreen({
-  onOpenWorker,
-  onOpenSettings,
-}: {
-  onOpenWorker: (workerId: number) => void;
-  onOpenSettings: () => void;
-}) {
-  const health = useHealthCheck();
-
-  return (
-    <div className="screen">
-      <p className="muted">
-        Home — one card per active Worker lands here (ticket 04). This scaffold just proves the
-        client, server, and database are wired together.
-      </p>
-      <p className="muted">
-        API health: <strong>{health}</strong>
-      </p>
-      <button className="btn-primary" type="button" onClick={() => onOpenWorker(1)}>
-        Open a worker (placeholder)
-      </button>
-      {/* Temporary entry point so Settings (ticket 03) is reachable before
-          ticket 04 builds the real home screen. Ticket 04 should replace
-          this with the spec'd "small gear on home" and route it to the
-          same { name: "settings" } screen — see screens/SettingsScreen.tsx. */}
-      <button className="btn-secondary" type="button" onClick={onOpenSettings}>
-        Settings
-      </button>
-    </div>
-  );
-}
-
-function WorkerScreen({ workerId, onBack }: { workerId: number; onBack: () => void }) {
-  return (
-    <div className="screen">
-      <button className="btn-secondary" type="button" onClick={onBack}>
-        &larr; Back
-      </button>
-      <p className="muted">
-        Worker hub for worker #{workerId} — Cycle / Settle / Details segmented control lands here
-        (tickets 05–06).
-      </p>
-    </div>
-  );
-}
-
-function useHealthCheck(): string {
-  const [status, setStatus] = useState("checking…");
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/health")
-      .then((res) => res.json())
-      .then((body: { ok: boolean }) => {
-        if (!cancelled) setStatus(body.ok ? "ok" : "unexpected response");
-      })
-      .catch(() => {
-        if (!cancelled) setStatus("unreachable");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return status;
 }
