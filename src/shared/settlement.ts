@@ -300,7 +300,17 @@ export function cycleWindows(worker: Worker, cycleConfigs: CycleConfig[], today:
     const segStart = config.effectiveFrom;
     const isLastSegment = i === configs.length - 1;
     const nextConfig = configs[i + 1];
-    const segEnd = isLastSegment ? worker.archivedOn : addDays(nextConfig!.effectiveFrom, -1);
+    const rawSegEnd = isLastSegment ? worker.archivedOn : addDays(nextConfig!.effectiveFrom, -1);
+    // SPEC §1.10: "the final partial cycle ends on the archived date" applies
+    // regardless of which cycle_configs segment today's window falls in — an
+    // Archive can land before a *future*, already-scheduled start-day change
+    // takes effect (rule §1.8), not just within the last segment. Clamp every
+    // segment to archivedOn, not only the last one, so that case still ends
+    // the window on the archived date instead of running past it.
+    const segEnd =
+      worker.archivedOn !== null && (rawSegEnd === null || worker.archivedOn < rawSegEnd)
+        ? worker.archivedOn
+        : rawSegEnd;
 
     for (const w of generateWindowsForSegment(segStart, segEnd, config.startDay)) {
       all.push({ start: w.start, end: w.end, open: w.end >= today });

@@ -177,4 +177,21 @@ describe("cycleWindows — §1.6 generation", () => {
 
     expect(current).toEqual({ start: "2026-03-01", end: "2026-03-15", open: false });
   });
+
+  it("archived worker with a pending start-day change: §1.10 still wins — the current window ends on the archived date, not the not-yet-effective segment's boundary", () => {
+    // A start-day change was scheduled to take effect 2026-08-01 (rule
+    // §1.8), then the Worker was archived on 2026-07-15 — before that
+    // change ever took effect. The archived-date clamp (§1.10) must apply
+    // to the *current* (July, old-startDay) segment too, not only to
+    // whichever cycle_configs row happens to be last.
+    const w = worker({ joinedOn: "2026-05-01", archivedOn: "2026-07-15" });
+    const configs: CycleConfig[] = [
+      { startDay: 1, effectiveFrom: "2026-05-01" },
+      { startDay: 15, effectiveFrom: "2026-08-01" }, // scheduled, never reached
+    ];
+
+    const { current } = cycleWindows(w, configs, "2026-07-15");
+
+    expect(current).toEqual({ start: "2026-07-01", end: "2026-07-15", open: true });
+  });
 });
