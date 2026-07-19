@@ -1,0 +1,93 @@
+# Research: how does Expo's web export integrate with a custom Hono server?
+
+Ticket: [011-research-expo-web-hono](../tickets/011-research-expo-web-hono.md) · Researched 2026-07-19 · Expo SDK 57 (current as of this research; the CLI/output shape has changed across SDKs, see caveats)
+
+## TL;DR
+
+Expo's web export is a **drop-in replacement for Vite's `dist/`** as far as Hono is concerned — **today's `src/server/index.ts` needs zero changes**, provided the app keeps `web.output: "single"` (the default, and the right choice since Daybook is staying a plain client-rendered SPA, not adopting Expo Router's static/server rendering). The two-`serveStatic`-call SPA-fallback pattern already in `src/server/index.ts` works unchanged. The bigger change is **dev time**: `expo start --web` runs on Metro, not Vite/Webpack, and Metro has **no equivalent of Vite's `server.proxy`**. The `concurrently` two-process shape survives, but the API must be reached via CORS + an absolute URL (`EXPO_PUBLIC_API_URL`) instead of a same-origin path proxy. Head-tag/PWA metadata (favicon, title, theme-color, manifest) partially maps to `app.json`'s `web` field (favicon only, auto-generated) but title/theme-color/manifest.json require manually maintaining a `public/index.html` + `public/manifest.json`, since Metro (unlike the deprecated `@expo/webpack-config`) does not auto-generate PWA metadata from `app.json`.
+
+---
+
+## 1. What `expo export --platform web` outputs
+
+**Command:** `npx expo export --platform web` (short form `npx expo export -p web`) — this is the current, actively-documented syntax on the Expo CLI reference and the web-publishing/deploy guides ([Expo CLI reference](https://docs.expo.dev/more/expo-cli/), [Publish websites](https://docs.expo.dev/guides/publishing-websites/), [Deploy your web app](https://docs.expo.dev/deploy/web/)). Relevant flags: `--output-dir <dir>` (default `dist`), `--dev` (unminified/dev build), `-c`/`--clear` (clear bundler cache), `--no-minify`, `--no-bytecode`, `--no-ssg` (skip static HTML export for web routes — Router-only) ([Expo CLI reference](https://docs.expo.dev/more/expo-cli/)).
+
+**Output shape is controlled by `expo.web.output` in `app.json`/`app.config.js`, default `"single"`:**
+
+- `"single"` — "Outputs a Single Page Application (SPA), with a single index.html in the output folder, and has no statically indexable HTML." This is the mode Daybook wants (no Expo Router, no SSR/SSG, one client-rendered bundle) — same conceptual shape as Vite's default SPA `dist/`.
+- `"static"` — pre-renders one HTML file per route; **only available in Expo Router apps** ([app.json/app.config.js reference](https://docs.expo.dev/versions/latest/config/app/)).
+- `"server"` — outputs `dist/client` + `dist/server` (API routes / Node server-rendering) — Router-only, not relevant here ([Static rendering](https://docs.expo.dev/router/web/static-rendering/), [Server rendering](https://docs.expo.dev/router/web/server-rendering/)).
+
+For `"single"` (Daybook's case): "The resulting project files are located in the **dist** directory. Any files inside the **public** directory are also copied to the **dist** directory" ([Publish websites](https://docs.expo.dev/guides/publishing-websites/), also stated in [Deploy your web app](https://docs.expo.dev/deploy/web/)). JS bundles land under a `dist/_expo/static/js/web/` path (Expo's Metro web output convention, confirmed by Expo's own bundle-analysis tooling: [Analyzing JS bundles](https://docs.expo.dev/guides/analyzing-bundles/); bundle filenames include a content hash for cache-busting, same idea as Vite's hashed asset filenames). One `index.html` sits at the root of `dist/`, same position as Vite's `dist/index.html` today.
+
+**Comparison to Vite's `dist/` (current):**
+
+| | Vite (current) | Expo web export, `output: "single"` |
+|---|---|---|
+| Output dir | `dist/` (configured via `build.outDir` in `vite.config.ts`, currently `../../dist`) | `dist/` (default; `--output-dir` to change) |
+| Entry HTML | `dist/index.html`, generated from `src/client/index.html` | `dist/index.html`, generated from a template (customizable via `public/index.html`, see §4) |
+| JS bundle path | `dist/assets/*.js` (hashed) | `dist/_expo/static/js/web/*.js` (hashed) |
+| Static/public passthrough | Vite's `public/` → copied to `dist/` root | Same convention: Expo's `public/` → copied to `dist/` root ([Publish websites](https://docs.expo.dev/guides/publishing-websites/)) |
+| Client-side routing | N/A today (no router in the app) | N/A for `"single"` output — no server routing concerns |
+
+**Local smoke-test of a production export:** `npx expo serve` serves the exported `dist/` at `http://localhost:8081`, explicitly noted as **HTTP only** (so things gated on a secure context won't work in that preview) ([Publish websites](https://docs.expo.dev/guides/publishing-websites/)). This is Expo's own dev-serve command, not what Daybook will use in production — Hono's `serveStatic` remains the production server, as today.
+
+**Caveat on "current command":** the export CLI surface has moved before — `expo export:web` was the pre-Router command name, folded into `expo export --platform web` once Expo Router/Metro-web became the default web pipeline; `@expo/webpack-config` (the previous web bundler) is deprecated as of SDK 50 in favor of Metro ([Migrate from Expo Webpack](https://docs.expo.dev/router/migrate/from-expo-webpack/)). Re-verify the exact flag names against `npx expo export --help` at implementation time if the SDK has moved past 57.
+
+## 2. Does Hono's `serve-static` need to change?
+
+**No change needed**, as long as `web.output` stays `"single"`. Verified against `@hono/node-server`'s actual `serve-static.ts` source ([honojs/node-server, main branch](https://github.com/honojs/node-server/blob/main/src/serve-static.ts)):
+
+- `ServeStaticOptions` supports `root`, `path`, `index` (default `'index.html'`, confirmed in source: `` const indexFile = options.index ?? 'index.html' ``), `precompressed`, `rewriteRequestPath`, `onFound`, `onNotFound`. There is **no separate `mimes` option to configure** — MIME type is resolved automatically per-file via Hono's own `getMimeType` (imported from `hono/utils/mime`), keyed off file extension, so `.js`, `.css`, `.png`, `.ico`, etc. from an Expo export need no extra MIME wiring, same as they need none today for Vite's output.
+- **When a requested file isn't found, `serveStatic` calls `next()` rather than returning a 404** (source: `if (!stats) { await options.onNotFound?.(path, c); return next() }`, and equivalently for directory-index misses). This is exactly what makes the **current** two-call pattern in `src/server/index.ts` work as an SPA fallback:
+
+  ```ts
+  app.use("/*", serveStatic({ root: "./dist" }));
+  app.get("*", serveStatic({ path: "./dist/index.html" }));
+  ```
+
+  The first call serves any real file under `dist/`; anything that doesn't match (e.g. a client-side route with no matching file) falls through via `next()` to the second call, which unconditionally serves `dist/index.html`. Since Expo's `"single"` output is — like Vite's — one `index.html` plus a static asset tree with no server-side routing expectations, **this exact pattern needs no modification** to serve an Expo `dist/` instead of a Vite `dist/`. (Today the app has no client-side router at all — no react-router, no expo-router — so the SPA-fallback path isn't even exercised yet, but it costs nothing and future-proofs against adding one.)
+- If Daybook ever adopts Expo Router with `web.output: "static"` or `"server"`, that changes the picture — `"static"` emits multiple HTML files (one per route, no single fallback needed, arguably simpler for Hono to serve as plain static files), and `"server"` requires a Node-compatible request handler for API routes, which is out of scope for "stays a plain web SPA" per the ticket's framing.
+
+## 3. Dev-time workflow: does `expo start --web` replace Vite dev + proxy?
+
+**Structurally yes** — `expo start --web` (or pressing `w` inside the `expo start` Terminal UI) is what replaces `vite`/`dev:client` as one half of the `concurrently` pair; the Hono `dev:server` (`tsx src/server/index.ts`) side is untouched, since Expo/Metro has nothing to do with the API. **But the mechanism for reaching the API changes**, and this is the one piece that isn't a drop-in swap:
+
+- `expo start` launches Metro's dev server, default port **8081** (`--port` to override) ([Expo CLI reference](https://docs.expo.dev/more/expo-cli/)).
+- **Metro has no built-in equivalent of Vite's `server.proxy` / Webpack's `devServer.proxy`.** This is confirmed by Expo's own issue tracker: an open, `docs`-labeled issue on `expo/expo` — [#35454, "Migration from `@expo/webpack-config`, unclear how to set a reverse proxy for api"](https://github.com/expo/expo/issues/35454) — states exactly Daybook's scenario (frontend on one Metro port, API on another, CORS failures) with no first-party answer beyond "no direct replacement exists"; `@expo/webpack-config` (which *did* expose a Webpack `devServer.proxy`-style option) is deprecated since SDK 50 ([Migrate from Expo Webpack](https://docs.expo.dev/router/migrate/from-expo-webpack/)). A parallel community discussion, [expo/expo#40852 "Proxy api calls in expo development"](https://github.com/expo/expo/discussions/40852), covers the same gap.
+- The two first-party-documented ways around this:
+  1. **CORS + absolute API URL** — enable CORS on the Hono dev server for the Metro dev origin and have the client call the API by full URL rather than a relative `/api/...` path. Hono ships a built-in CORS middleware for exactly this: `import { cors } from 'hono/cors'`, mounted per-route-prefix, e.g. `app.use('/api/*', cors({ origin: 'http://localhost:8081', credentials: true }))` ([Hono CORS middleware docs](https://hono.dev/docs/middleware/builtin/cors)). The absolute URL itself is supplied via an `EXPO_PUBLIC_`-prefixed environment variable — Expo CLI auto-loads `.env` files and inlines any `EXPO_PUBLIC_*` variable into the client bundle, readable as `process.env.EXPO_PUBLIC_API_URL` (dot-notation access only, no bracket access) ([Environment variables](https://docs.expo.dev/guides/environment-variables/)). This is the natural analogue of today's `PUBLIC_ORIGIN` pattern already in `src/server/index.ts`.
+  2. **Expo Router API routes** as a way to co-locate backend logic with the Metro dev server — explicitly **requires the `expo-router` package** and file-based `+api.ts` handlers ([API Routes](https://docs.expo.dev/router/web/api-routes/)); this is not a reverse proxy to an *external* process, it's a place to write server code, so it doesn't fit "keep the existing standalone Hono/better-sqlite3 server" and would mean re-platforming the API into Expo's server runtime — out of scope for this migration per the ticket framing.
+  - A third, unofficial option mentioned in community threads is hand-rolling proxy middleware via Metro's config server hooks, but Expo's own `metro.config.js` reference documents no `enhanceMiddleware`/`rewriteRequestUrl`-style server option ([metro.config.js reference](https://docs.expo.dev/versions/latest/config/metro/)) — that capability, if used at all, would come from upstream Metro/Node APIs, not anything Expo documents as supported surface.
+
+**Net effect on the `concurrently` setup:** the two-process shape (`dev:server` running Hono via `tsx`, `dev:client` running the web dev server) survives structurally — swap `vite` for `expo start --web`. What has to change is `src/server/index.ts` gaining a dev-only CORS middleware scoped to `/api/*` for the Metro origin (or an env-gated equivalent), and the client fetch layer (`src/client/api.ts`) switching from relative `/api/...` paths (today, proxied same-origin by Vite) to `${process.env.EXPO_PUBLIC_API_URL}/api/...` in dev, while presumably staying relative in the production Hono-served build where client and API share an origin again. `vite.config.ts`'s `server.proxy` block has no Expo/Metro equivalent to port forward — it should simply be deleted, not translated.
+
+## 4. `app.json` `web` config vs. today's `index.html` head tags
+
+Today, `src/client/index.html` hand-codes: `<meta name="theme-color" content="#D98E04">`, `<title>Daybook</title>`, viewport meta — no favicon `<link>`, no manifest currently. SPEC.md §"What this is" additionally calls for the name to appear as the "browser/home-screen title."
+
+Expo's `expo.web` app-config object (full field list per [app.json/app.config.js reference](https://docs.expo.dev/versions/latest/config/app/)) includes: `output`, `favicon`, `name` (document title, "defaults to the outer level name"), `shortName` (≤12 chars, for app launchers/manifest `short_name`), `lang`, `scope`, `themeColor` (6-digit hex — Android toolbar / task-switcher color), `description`, `dir`, `display` (`fullscreen`/`standalone`/`minimal-ui`/`browser`), `startUrl`, `orientation`, `backgroundColor`, `barStyle`, `preferRelatedApplications`, `splash`, `bundler` (`webpack`/`metro`).
+
+**How much of this is auto-applied to the build output, versus needing manual work, differs by field and is a real gap versus what Vite's `index.html` did directly:**
+
+- **Favicon — auto-generated.** "Expo CLI automatically generates the `favicon.ico` file based on the `web.favicon` field in the app.json" ([Progressive web apps](https://docs.expo.dev/guides/progressive-web-apps/)), and this behavior is explicitly carried over from the deprecated Webpack config into the current Metro-based pipeline: "Like `@expo/webpack-config`, Expo Router supports generating the favicon.ico file based on the `web.favicon` field in the app.json" ([Migrate from Expo Webpack](https://docs.expo.dev/router/migrate/from-expo-webpack/)). Set `expo.web.favicon` and this one is handled without touching HTML.
+- **Title, theme-color meta tag, PWA manifest.json — NOT auto-generated by Metro.** The webpack-era pipeline used to synthesize these into the emitted HTML/manifest automatically; Metro does not. The official migration guide is explicit: *"Unlike `@expo/webpack-config`, Expo Router does not automatically attempt to generate the PWA manifest configuration. You can create one in `public/manifest.json`"* ([Migrate from Expo Webpack](https://docs.expo.dev/router/migrate/from-expo-webpack/)). For Expo Router apps the escape hatch is a `src/app/+html.tsx` root-HTML component where you hand-write the `<meta name="theme-color">`, `<title>`, and `<link rel="manifest" href="/manifest.json">` tags.
+- **Daybook specifically has no Expo Router** (no router dependency in `package.json`, screens are switched by plain component state, confirmed by reading `App.tsx`/`src/client/screens/`), so `+html.tsx` isn't available. The documented mechanism for a plain (non-Router) Metro web app is the same one Vite already uses conceptually: **Expo's Metro web build supports overriding the default HTML template with a hand-written `public/index.html`**, and separately, anything placed in `public/` is copied verbatim into `dist/` on export ([Publish websites](https://docs.expo.dev/guides/publishing-websites/); template-override behavior corroborated by Expo's own `public/` static-file-serving convention referenced across the docs and by community reports of the same pattern). In practice this means: **`title`, `theme-color`, and the PWA manifest link stay hand-authored in a `public/index.html`, functionally continuing today's `src/client/index.html` approach almost unchanged** — just relocated and with `favicon.ico` now generated for you from `app.json` instead of linked by hand. A `public/manifest.json` must be hand-written too (no field in `app.json`'s `web` object writes it out on `"single"`/non-Router builds — `name`/`shortName`/`themeColor`/`backgroundColor` etc. read as manifest-shaped fields in the schema, but the documented auto-generation of the manifest *file* is Router-guide language only; treat it as authoritative for Router apps and unconfirmed/likely-absent for the plain Metro pipeline Daybook will use, and verify by inspecting actual `expo export` output during implementation).
+
+**Practical mapping for Daybook's migration:**
+
+| Today (`src/client/index.html`) | Expo equivalent |
+|---|---|
+| `<title>Daybook</title>` | Hand-write in `public/index.html` (or set `expo.web.name`, but confirm at implementation time whether/where that's actually injected for non-Router `"single"` builds — docs only confirm this pathway for Router) |
+| `<meta name="theme-color" content="#D98E04">` | Hand-write in `public/index.html`; optionally mirror the value into `expo.web.themeColor` for consistency/manifest use |
+| No favicon today | Set `expo.web.favicon` in `app.json` — auto-generates `favicon.ico`, no HTML change needed |
+| No manifest today | If "add to home screen" naming matters (per SPEC.md), hand-write `public/manifest.json` (short_name/name/theme_color/background_color) and link it from `public/index.html`, same as the Router-guide's `+html.tsx` example does explicitly |
+
+## Sources
+
+- Expo CLI / export: [Expo CLI reference](https://docs.expo.dev/more/expo-cli/) · [Publish websites](https://docs.expo.dev/guides/publishing-websites/) · [Deploy your web app](https://docs.expo.dev/deploy/web/)
+- Output modes / app config: [app.json / app.config.js reference](https://docs.expo.dev/versions/latest/config/app/) (current at SDK 57, [v57.0.0](https://docs.expo.dev/versions/latest/)) · [Static rendering](https://docs.expo.dev/router/web/static-rendering/) · [Server rendering](https://docs.expo.dev/router/web/server-rendering/) · [Analyzing JS bundles](https://docs.expo.dev/guides/analyzing-bundles/)
+- Webpack → Metro migration / PWA metadata: [Migrate from Expo Webpack](https://docs.expo.dev/router/migrate/from-expo-webpack/) · [Progressive web apps](https://docs.expo.dev/guides/progressive-web-apps/)
+- Dev server / proxying / env vars: [Environment variables](https://docs.expo.dev/guides/environment-variables/) · [metro.config.js reference](https://docs.expo.dev/versions/latest/config/metro/) · [API Routes](https://docs.expo.dev/router/web/api-routes/) · [expo/expo#35454 — reverse proxy migration gap](https://github.com/expo/expo/issues/35454) · [expo/expo#40852 — proxy api calls discussion](https://github.com/expo/expo/discussions/40852)
+- Hono: [serve-static source (honojs/node-server, main)](https://github.com/honojs/node-server/blob/main/src/serve-static.ts) · [CORS middleware docs](https://hono.dev/docs/middleware/builtin/cors)
+- Repo current-state files read for comparison: `package.json`, `vite.config.ts`, `src/server/index.ts`, `src/client/index.html`, `SPEC.md` §7
