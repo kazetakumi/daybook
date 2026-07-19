@@ -1,4 +1,4 @@
-# Research: tunnel options for exposing the attendance app to family phones
+# Research: tunnel options for exposing Daybook to family phones
 
 Ticket: [002-research-tunnel](../tickets/002-research-tunnel.md) · Researched 2026-07-15
 
