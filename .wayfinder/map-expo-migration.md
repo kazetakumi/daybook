@@ -23,6 +23,7 @@ A migration-ready plan for moving Daybook's client from Vite+React to Expo (web 
 - [Research: how does Expo's web export integrate with a custom Hono server?](tickets/011-research-expo-web-hono.md) — Drop-in replacement for Vite's `dist/`, zero changes to Hono's `serveStatic`; dev-time needs CORS + an absolute API URL instead of Vite's proxy (Metro has no equivalent); favicon auto-generates from `app.json`, but title/theme-color/manifest stay hand-authored in `public/index.html`.
 - [Research: does the existing PIN cookie-session auth work unchanged under Expo web / react-native-web?](tickets/012-research-auth-cors.md) — No divergence in production (react-native-web has no fetch layer of its own); dev breaks not from SameSite but from the missing Vite proxy — needs either `hono/cors` + `credentials: 'include'`, or a small dev-only reverse proxy.
 - [Decision: where does Daybook actually run — Windows machine vs. Oracle Cloud VPS?](tickets/017-hosting.md) — Stay on the Windows machine; Oracle's Always Free VPS was the strongest alternative but its card-for-verification requirement wasn't worth it for an app with no real uptime problem today.
+- [Decision: styling approach for rebuilding the UI in React Native primitives](tickets/014-styling.md) — NativeWind (Tailwind for RN): universal RN+web styling via react-native-web, and its CSS-variable/`dark:` support maps onto the existing design-token/theming setup in `index.css` rather than discarding it.
 
 ## Not yet specified
 
