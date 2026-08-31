@@ -13,8 +13,14 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // Bind IPv4 explicitly: Vite's default "localhost" resolves to ::1 only
+    // on Windows, which Chrome (resolving localhost to 127.0.0.1) can't reach.
+    host: "127.0.0.1",
     proxy: {
-      "/api": {
+      // Regex, not a prefix: a bare "/api" key also swallows the client's own
+      // /api.ts module request and proxies it to the server, which answers
+      // with SPA-fallback HTML and breaks the module load.
+      "^/api/": {
         target: `http://localhost:${apiPort}`,
         changeOrigin: true,
       },
