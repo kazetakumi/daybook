@@ -1,21 +1,14 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import type { Sql } from "../db";
+import { makeTestDb as makeDb } from "../testing/testDb";
 import { createSessionMiddleware } from "../middleware/session";
 import { createAuthRoute } from "./auth";
 import { createWorkersRoute } from "./workers";
 import { createMarksRoute } from "./marks";
 
-function makeDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.exec(readFileSync(join(process.cwd(), "schema.sql"), "utf-8"));
-  return db;
-}
-
 // Mirrors the real wiring in src/server/index.ts.
-function makeApp(db: Database.Database) {
+function makeApp(db: Sql) {
   const app = new Hono();
   app.use("/api/*", createSessionMiddleware(db));
   app.route("/api", createAuthRoute(db));
@@ -60,30 +53,20 @@ function addDaysISO(iso: string, n: number): string {
 /** Seeds a worker backdated well before "today" so past-window / quota-reflow
  * scenarios have enough history to exercise (POST /api/workers alone can't —
  * joined_on is always today). */
-function seedBackdatedWorker(
-  db: Database.Database,
+async function seedBackdatedWorker(
+  db: Sql,
   id: number,
   opts: { rate?: number; quota?: number; joinedOn?: string; cycleStartDay?: number } = {},
 ) {
   const { rate = 200, quota = 2, joinedOn = "2020-01-01", cycleStartDay = 1 } = opts;
-  db.prepare(
-    "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (?, 'Test', ?, ?)",
-  ).run(id, joinedOn, quota);
-  db.prepare("INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (?, ?, ?)").run(
-    id,
-    rate,
-    joinedOn,
-  );
-  db.prepare("INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (?, ?, ?)").run(
-    id,
-    cycleStartDay,
-    joinedOn,
-  );
+  await db`INSERT INTO daybook_workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (${id}, 'Test', ${joinedOn}, ${quota})`;
+  await db`INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from) VALUES (${id}, ${rate}, ${joinedOn})`;
+  await db`INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from) VALUES (${id}, ${cycleStartDay}, ${joinedOn})`;
 }
 
 describe("PUT /api/marks/:workerId/:date without a session", () => {
   it("401s — proves the shared session middleware gates marks routes too", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/marks/1/2020-01-01", jsonReq("PUT", { state: "leave" }, ""));
     expect(res.status).toBe(401);
   });
@@ -91,7 +74,7 @@ describe("PUT /api/marks/:workerId/:date without a session", () => {
 
 describe("PUT /api/marks/:workerId/:date", () => {
   it("404s for a worker that doesn't exist", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
     const res = await app.request("/api/marks/999/2020-01-01", jsonReq("PUT", { state: "leave" }, cookie));
@@ -99,8 +82,8 @@ describe("PUT /api/marks/:workerId/:date", () => {
   });
 
   it("rejects an invalid state", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1);
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1);
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
     const res = await app.request("/api/marks/1/2020-01-05", jsonReq("PUT", { state: "sick" }, cookie));
@@ -108,8 +91,8 @@ describe("PUT /api/marks/:workerId/:date", () => {
   });
 
   it("rejects a date after today", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1);
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1);
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -120,13 +103,13 @@ describe("PUT /api/marks/:workerId/:date", () => {
     );
     expect(res.status).toBe(400);
 
-    const row = db.prepare("SELECT * FROM marks WHERE worker_id = 1 AND date = ?").get(future);
+    const row = (await db`SELECT * FROM daybook_marks WHERE worker_id = 1 AND date = ${future}`)[0];
     expect(row).toBeUndefined();
   });
 
   it("rejects a date before the worker joined", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1, { joinedOn: "2020-06-01" });
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1, { joinedOn: "2020-06-01" });
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -138,8 +121,8 @@ describe("PUT /api/marks/:workerId/:date", () => {
   });
 
   it("upserts a leave row, then a PUT of 'present' deletes it (exceptions-only storage)", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1);
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1);
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -148,7 +131,7 @@ describe("PUT /api/marks/:workerId/:date", () => {
       jsonReq("PUT", { state: "leave" }, cookie),
     );
     expect(put1.status).toBe(200);
-    const row1 = db.prepare("SELECT * FROM marks WHERE worker_id = 1 AND date = '2020-01-05'").get() as
+    const row1 = (await db`SELECT * FROM daybook_marks WHERE worker_id = 1 AND date = '2020-01-05'`)[0] as
       | { state: string }
       | undefined;
     expect(row1?.state).toBe("leave");
@@ -156,12 +139,12 @@ describe("PUT /api/marks/:workerId/:date", () => {
     // Re-marking with a different state (off) upserts in place, not a duplicate row.
     const put2 = await app.request("/api/marks/1/2020-01-05", jsonReq("PUT", { state: "off" }, cookie));
     expect(put2.status).toBe(200);
-    const row2 = db.prepare("SELECT * FROM marks WHERE worker_id = 1 AND date = '2020-01-05'").get() as
+    const row2 = (await db`SELECT * FROM daybook_marks WHERE worker_id = 1 AND date = '2020-01-05'`)[0] as
       | { state: string }
       | undefined;
     expect(row2?.state).toBe("off");
     const countAfterUpsert = (
-      db.prepare("SELECT COUNT(*) as n FROM marks WHERE worker_id = 1 AND date = '2020-01-05'").get() as {
+      (await db`SELECT COUNT(*)::int as n FROM daybook_marks WHERE worker_id = 1 AND date = '2020-01-05'`)[0] as {
         n: number;
       }
     ).n;
@@ -169,19 +152,19 @@ describe("PUT /api/marks/:workerId/:date", () => {
 
     // Marking back to 'present' removes the row entirely (this is the
     // acceptance item: "verify no marks rows for Present days" via direct
-    // SQLite query).
+    // database query).
     const put3 = await app.request(
       "/api/marks/1/2020-01-05",
       jsonReq("PUT", { state: "present" }, cookie),
     );
     expect(put3.status).toBe(200);
-    const row3 = db.prepare("SELECT * FROM marks WHERE worker_id = 1 AND date = '2020-01-05'").get();
+    const row3 = (await db`SELECT * FROM daybook_marks WHERE worker_id = 1 AND date = '2020-01-05'`)[0];
     expect(row3).toBeUndefined();
   });
 
   it("succeeds for a date in a past cycle window (past days stay editable)", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1);
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1);
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -191,7 +174,7 @@ describe("PUT /api/marks/:workerId/:date", () => {
       jsonReq("PUT", { state: "leave" }, cookie),
     );
     expect(res.status).toBe(200);
-    const row = db.prepare("SELECT * FROM marks WHERE worker_id = 1 AND date = '2020-01-10'").get() as
+    const row = (await db`SELECT * FROM daybook_marks WHERE worker_id = 1 AND date = '2020-01-10'`)[0] as
       | { state: string }
       | undefined;
     expect(row?.state).toBe("leave");
@@ -200,7 +183,7 @@ describe("PUT /api/marks/:workerId/:date", () => {
 
 describe("GET /api/marks/:workerId", () => {
   it("404s for a worker that doesn't exist", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
     const res = await app.request("/api/marks/999", { headers: { cookie } });
@@ -208,8 +191,8 @@ describe("GET /api/marks/:workerId", () => {
   });
 
   it("returns marks within a from/to window, excluding marks outside it", async () => {
-    const db = makeDb();
-    seedBackdatedWorker(db, 1);
+    const db = await makeDb();
+    await seedBackdatedWorker(db, 1);
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -227,7 +210,7 @@ describe("GET /api/marks/:workerId", () => {
 
 describe("home cards reflect a mark live", () => {
   it("PUT-ing a leave for today changes GET /api/home's amount and leavesUsed without any other change", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -257,7 +240,7 @@ describe("home cards reflect a mark live", () => {
   });
 
   it("PUT-ing 'off' for today halves that card's amount on GET /api/home", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -287,9 +270,9 @@ describe("home cards reflect a mark live", () => {
 
 describe("quota reflow (SPEC.md §3 fixture 4, exercised through the marks route)", () => {
   it("back-dating an earlier Leave flips a later one from paid to unpaid", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     // quota 2, backdated far enough that Jun 2020 stays inside one cycle window.
-    seedBackdatedWorker(db, 1, { quota: 2, joinedOn: "2020-06-01", cycleStartDay: 1 });
+    await seedBackdatedWorker(db, 1, { quota: 2, joinedOn: "2020-06-01", cycleStartDay: 1 });
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 

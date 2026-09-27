@@ -1,6 +1,6 @@
-import type Database from "better-sqlite3";
 import { getCookie } from "hono/cookie";
 import type { MiddlewareHandler } from "hono";
+import type { Sql } from "../db";
 import { SESSION_COOKIE_NAME, getSessionSecret, verifySessionToken } from "../lib/auth";
 
 // Paths under /api/* that must work *without* a session: the two auth
@@ -21,8 +21,18 @@ export const SESSION_EXEMPT_PATHS = new Set<string>([
  * paths above. Returns 401 JSON on missing/invalid/expired session so the
  * client's fetch wrapper can detect it and show the PIN screen.
  */
-export function createSessionMiddleware(db: Database.Database): MiddlewareHandler {
-  const secret = getSessionSecret(db);
+export function createSessionMiddleware(sql: Sql): MiddlewareHandler {
+  // Read once on first request and reused — the secret never changes for
+  // the life of the database. A failed read isn't cached, so the next
+  // request retries.
+  let secret: Promise<string> | undefined;
+  const loadSecret = () => {
+    secret ??= getSessionSecret(sql).catch((err: unknown) => {
+      secret = undefined;
+      throw err;
+    });
+    return secret;
+  };
 
   return async (c, next) => {
     if (SESSION_EXEMPT_PATHS.has(c.req.path)) {
@@ -31,7 +41,7 @@ export function createSessionMiddleware(db: Database.Database): MiddlewareHandle
     }
 
     const token = getCookie(c, SESSION_COOKIE_NAME);
-    if (!verifySessionToken(secret, token)) {
+    if (!verifySessionToken(await loadSecret(), token)) {
       return c.json({ error: "unauthorized" }, 401);
     }
 

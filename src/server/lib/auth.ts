@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type Database from "better-sqlite3";
-import { getSetting, setSetting } from "./settings";
+import type { Sql } from "../db";
+import { getOrInitSetting } from "./settings";
 
 // --- PIN hashing (SPEC.md §5: scrypt, per-hash random salt, never plaintext) ---
 
@@ -36,13 +36,9 @@ export const SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days, per SPEC.m
 
 const SESSION_SECRET_KEY = "session_secret";
 
-/** Reads the HMAC signing key from `settings`, generating and persisting one on first use. */
-export function getSessionSecret(db: Database.Database): string {
-  const existing = getSetting(db, SESSION_SECRET_KEY);
-  if (existing) return existing;
-  const secret = randomBytes(32).toString("hex");
-  setSetting(db, SESSION_SECRET_KEY, secret);
-  return secret;
+/** Reads the HMAC signing key from `daybook_settings`, generating and persisting one on first use. */
+export function getSessionSecret(sql: Sql): Promise<string> {
+  return getOrInitSetting(sql, SESSION_SECRET_KEY, randomBytes(32).toString("hex"));
 }
 
 function sign(secret: string, payloadB64: string): string {

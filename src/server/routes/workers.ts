@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type Database from "better-sqlite3";
+import type { Sql } from "../db";
 import { computeSettlement, cycleWindows } from "../../shared/settlement";
 import type { CycleWindow, Settlement } from "../../shared/settlement";
 import {
@@ -78,15 +78,18 @@ function toEpochDay(iso: string): number {
  * read Worker/RatePeriod/CycleConfig/Mark rows via ../lib/workers.ts, same
  * as this file — no shared mutable state, no imports from this file needed.
  */
-export function createWorkersRoute(db: Database.Database): Hono {
+export function createWorkersRoute(sql: Sql): Hono {
   const route = new Hono();
 
-  route.get("/home", (c) => {
+  route.get("/home", async (c) => {
     const today = todayISO();
-    const cards = listActiveWorkers(db).map((worker) => {
-      const cycleConfigs = loadCycleConfigs(db, worker.id);
-      const ratePeriods = loadRatePeriods(db, worker.id);
-      const marks = loadMarks(db, worker.id);
+    const workers = await listActiveWorkers(sql);
+    const cards = await Promise.all(workers.map(async (worker) => {
+      const [cycleConfigs, ratePeriods, marks] = await Promise.all([
+        loadCycleConfigs(sql, worker.id),
+        loadRatePeriods(sql, worker.id),
+        loadMarks(sql, worker.id),
+      ]);
       const { current } = cycleWindows(worker, cycleConfigs, today);
       const settlement = computeSettlement(worker, current, marks, ratePeriods, today);
       return {
@@ -100,7 +103,7 @@ export function createWorkersRoute(db: Database.Database): Hono {
         window: current,
         progress: cycleProgress(current, today),
       };
-    });
+    }));
     return c.json({ workers: cards });
   });
 
@@ -128,30 +131,33 @@ export function createWorkersRoute(db: Database.Database): Hono {
     // A new Worker's joined_on doubles as the first rate_periods and
     // cycle_configs row's effective_from (SPEC.md §1.1, §2) — all three
     // writes happen together or not at all.
-    const workerId = db.transaction(() => {
-      const info = db
-        .prepare("INSERT INTO workers (name, role, joined_on, paid_leaves_per_cycle) VALUES (?, ?, ?, ?)")
-        .run(name, role, joinedOn, quota);
-      const id = Number(info.lastInsertRowid);
-      db.prepare(
-        "INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (?, ?, ?)",
-      ).run(id, rate, joinedOn);
-      db.prepare(
-        "INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (?, ?, ?)",
-      ).run(id, cycleStartDay, joinedOn);
+    const workerId = await sql.begin(async (tx) => {
+      const [worker] = await tx<{ id: number }[]>`
+        INSERT INTO daybook_workers (name, role, joined_on, paid_leaves_per_cycle)
+        VALUES (${name}, ${role}, ${joinedOn}, ${quota})
+        RETURNING id
+      `;
+      const id = worker!.id;
+      await tx`
+        INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from)
+        VALUES (${id}, ${rate}, ${joinedOn})
+      `;
+      await tx`
+        INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from)
+        VALUES (${id}, ${cycleStartDay}, ${joinedOn})
+      `;
       return id;
-    })();
+    });
 
     return c.json({ id: workerId });
   });
 
-  route.get("/workers/:id", (c) => {
+  route.get("/workers/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const worker = loadWorker(db, id);
+    const worker = await loadWorker(sql, id);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
-    const ratePeriods = loadRatePeriods(db, id);
-    const cycleConfigs = loadCycleConfigs(db, id);
+    const [ratePeriods, cycleConfigs] = await Promise.all([loadRatePeriods(sql, id), loadCycleConfigs(sql, id)]);
     const today = todayISO();
 
     return c.json({
@@ -170,7 +176,7 @@ export function createWorkersRoute(db: Database.Database): Hono {
 
   route.patch("/workers/:id", async (c) => {
     const id = Number(c.req.param("id"));
-    const worker = loadWorker(db, id);
+    const worker = await loadWorker(sql, id);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     const body = await readJsonBody(c);
@@ -179,17 +185,17 @@ export function createWorkersRoute(db: Database.Database): Hono {
       if (!isNonNegInt(body.quota)) {
         return c.json({ error: "paid-leave quota must be a non-negative whole number" }, 400);
       }
-      db.prepare("UPDATE workers SET paid_leaves_per_cycle = ? WHERE id = ?").run(body.quota, id);
+      await sql`UPDATE daybook_workers SET paid_leaves_per_cycle = ${body.quota} WHERE id = ${id}`;
     }
 
     // Archiving is one-way and idempotent (SPEC.md §1.10: no hard delete,
     // "hides ... history and Payments kept forever"). Re-archiving an
     // already-archived Worker is a no-op, not an error.
     if (body.archive === true && !worker.archivedOn) {
-      db.prepare("UPDATE workers SET archived_on = ? WHERE id = ?").run(todayISO(), id);
+      await sql`UPDATE daybook_workers SET archived_on = ${todayISO()} WHERE id = ${id}`;
     }
 
-    const updated = loadWorker(db, id);
+    const updated = await loadWorker(sql, id);
     if (!updated) return c.json({ error: "worker not found" }, 404);
 
     return c.json({
@@ -204,7 +210,7 @@ export function createWorkersRoute(db: Database.Database): Hono {
 
   route.post("/workers/:id/rate", async (c) => {
     const id = Number(c.req.param("id"));
-    const worker = loadWorker(db, id);
+    const worker = await loadWorker(sql, id);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     const body = await readJsonBody(c);
@@ -222,16 +228,17 @@ export function createWorkersRoute(db: Database.Database): Hono {
       return c.json({ error: "effective-from date can't be before the worker joined" }, 400);
     }
 
-    db.prepare(
-      "INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (?, ?, ?)",
-    ).run(id, rate, effectiveFrom);
+    await sql`
+      INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from)
+      VALUES (${id}, ${rate}, ${effectiveFrom})
+    `;
 
     return c.json({ ok: true, effectiveFrom });
   });
 
   route.post("/workers/:id/cycle-config", async (c) => {
     const id = Number(c.req.param("id"));
-    const worker = loadWorker(db, id);
+    const worker = await loadWorker(sql, id);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     const body = await readJsonBody(c);
@@ -240,7 +247,7 @@ export function createWorkersRoute(db: Database.Database): Hono {
       return c.json({ error: "cycle start day must be between 1 and 28" }, 400);
     }
 
-    const cycleConfigs = loadCycleConfigs(db, id);
+    const cycleConfigs = await loadCycleConfigs(sql, id);
     const today = todayISO();
     const { current } = cycleWindows(worker, cycleConfigs, today);
 
@@ -250,16 +257,17 @@ export function createWorkersRoute(db: Database.Database): Hono {
     // not from today.
     const effectiveFrom = addDaysISO(current.end, 1);
 
-    db.prepare(
-      "INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (?, ?, ?)",
-    ).run(id, startDay, effectiveFrom);
+    await sql`
+      INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from)
+      VALUES (${id}, ${startDay}, ${effectiveFrom})
+    `;
 
     return c.json({ ok: true, effectiveFrom });
   });
 
-  route.get("/workers/:id/cycles", (c) => {
+  route.get("/workers/:id/cycles", async (c) => {
     const id = Number(c.req.param("id"));
-    const loaded = loadWorker(db, id);
+    const loaded = await loadWorker(sql, id);
     if (!loaded) return c.json({ error: "worker not found" }, 404);
     const worker = loaded; // narrowed non-null, safe to close over below
 
@@ -268,9 +276,11 @@ export function createWorkersRoute(db: Database.Database): Hono {
       return c.json({ error: "before must be an ISO date" }, 400);
     }
 
-    const ratePeriods = loadRatePeriods(db, id);
-    const cycleConfigs = loadCycleConfigs(db, id);
-    const marks = loadMarks(db, id);
+    const [ratePeriods, cycleConfigs, marks] = await Promise.all([
+      loadRatePeriods(sql, id),
+      loadCycleConfigs(sql, id),
+      loadMarks(sql, id),
+    ]);
     const today = todayISO();
 
     const windows = cycleWindows(worker, cycleConfigs, today);

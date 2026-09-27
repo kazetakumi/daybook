@@ -105,7 +105,7 @@ function minISO(a: ISODate, b: ISODate): ISODate {
 
 /**
  * The first date on or after `iso` whose day-of-month is `startDay`.
- * Since Cycle start days are constrained to 1–28 (see schema.sql CHECK),
+ * Since Cycle start days are constrained to 1–28 (see the daybook_cycle_configs CHECK in supabase/migrations/),
  * every month has a valid candidate — no short-month clamping needed.
  */
 function onOrAfterStartDay(iso: ISODate, startDay: number): ISODate {

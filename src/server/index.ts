@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
-import { getDb } from "./db";
+import { assertSchemaReady, getDb } from "./db";
 import { createSessionMiddleware } from "./middleware/session";
 import { createAuthRoute } from "./routes/auth";
 import { healthRoute } from "./routes/health";
@@ -12,9 +12,9 @@ import { createPaymentsRoute } from "./routes/payments";
 import { createMarksRoute } from "./routes/marks";
 import { createBackupRoute } from "./routes/backup";
 
-// Creates data/daybook.sqlite (and its six tables from schema.sql) on first
-// run, before the server starts accepting requests.
-getDb();
+// Connects to Postgres (DATABASE_URL) and checks the Daybook migration has
+// been applied, before the server starts accepting requests.
+await assertSchemaReady(getDb());
 
 const app = new Hono();
 

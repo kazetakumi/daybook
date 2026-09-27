@@ -1,23 +1,14 @@
-import { readFileSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import type { Sql } from "../db";
+import { makeTestDb as makeDb } from "../testing/testDb";
 import { createSessionMiddleware } from "../middleware/session";
 import { createAuthRoute } from "./auth";
 import { createWorkersRoute } from "./workers";
-import { createBackupRoute } from "./backup";
-
-function makeDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.exec(readFileSync(join(process.cwd(), "schema.sql"), "utf-8"));
-  return db;
-}
+import { BACKUP_SCHEMA_VERSION, createBackupRoute } from "./backup";
 
 // Mirrors the real wiring in src/server/index.ts.
-function makeApp(db: Database.Database) {
+function makeApp(db: Sql) {
   const app = new Hono();
   app.use("/api/*", createSessionMiddleware(db));
   app.route("/api", createAuthRoute(db));
@@ -38,25 +29,30 @@ async function loggedInCookie(app: Hono): Promise<string> {
   return match[0];
 }
 
-const EXPECTED_TABLES = ["workers", "rate_periods", "cycle_configs", "marks", "payments", "settings"];
+interface BackupBody {
+  exportedAt: string;
+  schemaVersion: string;
+  tables: Record<string, Array<Record<string, unknown>>>;
+}
+
+const EXPECTED_TABLES = ["workers", "rate_periods", "cycle_configs", "marks", "payments"];
 
 describe("GET /api/backup without a session", () => {
   it("401s — proves the shared session middleware gates this route too", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/backup");
     expect(res.status).toBe(401);
   });
 });
 
 describe("GET /api/backup", () => {
-  it("streams a dated .sqlite snapshot containing all six tables and current data", async () => {
-    const db = makeDb();
+  it("downloads a dated JSON export of every data table, with dates as plain ISO strings", async () => {
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
-    db.prepare(
-      "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (1, 'Seeded Worker', '2020-01-01', 2)",
-    ).run();
+    await db`INSERT INTO daybook_workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (1, 'Seeded Worker', '2020-01-01', 2)`;
+    await db`INSERT INTO daybook_marks (worker_id, date, state) VALUES (1, '2020-01-05', 'off')`;
 
     const res = await app.request("/api/backup", { headers: { cookie } });
     expect(res.status).toBe(200);
@@ -64,43 +60,44 @@ describe("GET /api/backup", () => {
     const today = new Date();
     const expectedName = `daybook-${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
       today.getDate(),
-    ).padStart(2, "0")}.sqlite`;
+    ).padStart(2, "0")}.json`;
     expect(res.headers.get("content-disposition")).toContain(`filename="${expectedName}"`);
 
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const tempPath = join(tmpdir(), `backup-test-${randomUUID()}.sqlite`);
-    writeFileSync(tempPath, buffer);
-
-    try {
-      const snapshot = new Database(tempPath, { readonly: true });
-      const tableNames = (
-        snapshot.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
-      ).map((row) => row.name);
-      for (const table of EXPECTED_TABLES) {
-        expect(tableNames).toContain(table);
-      }
-
-      const worker = snapshot.prepare("SELECT name FROM workers WHERE id = 1").get() as { name: string } | undefined;
-      expect(worker?.name).toBe("Seeded Worker");
-      snapshot.close();
-    } finally {
-      rmSync(tempPath, { force: true });
-    }
+    const body = (await res.json()) as BackupBody;
+    expect(body.schemaVersion).toBe(BACKUP_SCHEMA_VERSION);
+    expect(Object.keys(body.tables).sort()).toEqual([...EXPECTED_TABLES].sort());
+    expect(body.tables.workers).toEqual([
+      { id: 1, name: "Seeded Worker", role: null, joined_on: "2020-01-01", archived_on: null, paid_leaves_per_cycle: 2 },
+    ]);
+    expect(body.tables.marks).toEqual([{ worker_id: 1, date: "2020-01-05", state: "off" }]);
   });
 
-  it("succeeds concurrently with a write against the live database (online backup, not a raw file copy)", async () => {
-    const db = makeDb();
+  it("never includes the PIN hash or the session-signing key", async () => {
+    const db = await makeDb();
+    const app = makeApp(db);
+    const cookie = await loggedInCookie(app); // sets pin_hash; the middleware creates session_secret
+
+    const res = await app.request("/api/backup", { headers: { cookie } });
+    const text = await res.text();
+    const [pinHash] = await db<{ value: string }[]>`SELECT value FROM daybook_settings WHERE key = 'pin_hash'`;
+    const [secret] = await db<{ value: string }[]>`SELECT value FROM daybook_settings WHERE key = 'session_secret'`;
+
+    expect(pinHash && secret).toBeTruthy();
+    expect(text).not.toContain(pinHash!.value);
+    expect(text).not.toContain(secret!.value);
+    expect(text).not.toContain("settings");
+  });
+
+  it("succeeds concurrently with a write against the live database", async () => {
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
-    db.prepare(
-      "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (1, 'Before Backup', '2020-01-01', 2)",
-    ).run();
+    await db`INSERT INTO daybook_workers (name, joined_on, paid_leaves_per_cycle) VALUES ('Before Backup', '2020-01-01', 2)`;
 
     // Kick off the backup request and, without awaiting it first, perform a
-    // write against the same live handle — proving GET /api/backup doesn't
-    // lock the database out from under concurrent app usage the way copying
-    // the raw file while WAL pages are uncommitted could.
+    // write through the app — the export's read-only snapshot transaction
+    // must not block, or be broken by, ordinary family usage.
     const backupPromise = app.request("/api/backup", { headers: { cookie } });
     const writeRes = await app.request("/api/workers", {
       method: "POST",
@@ -112,10 +109,7 @@ describe("GET /api/backup", () => {
     expect(writeRes.status).toBe(200);
     expect(backupRes.status).toBe(200);
 
-    const buffer = Buffer.from(await backupRes.arrayBuffer());
-    expect(buffer.byteLength).toBeGreaterThan(0);
-    // A valid SQLite file starts with this 16-byte magic header — cheap
-    // corruption check without needing to open it.
-    expect(buffer.subarray(0, 16).toString("utf-8")).toBe("SQLite format 3\0");
+    const body = (await backupRes.json()) as BackupBody;
+    expect(body.tables.workers?.map((w) => w.name)).toContain("Before Backup");
   });
 });

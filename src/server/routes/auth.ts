@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { setCookie } from "hono/cookie";
-import type Database from "better-sqlite3";
+import type { Sql } from "../db";
 import { getSetting, setSetting } from "../lib/settings";
 import {
   LoginBackoff,
@@ -16,8 +16,8 @@ import {
 
 const PIN_HASH_KEY = "pin_hash";
 
-function issueSession(c: Context, db: Database.Database): void {
-  const secret = getSessionSecret(db);
+async function issueSession(c: Context, sql: Sql): Promise<void> {
+  const secret = await getSessionSecret(sql);
   const token = createSessionToken(secret, SESSION_TTL_MS);
   setCookie(c, SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -42,8 +42,8 @@ async function readPinBody(c: Context): Promise<Record<string, unknown>> {
 }
 
 /**
- * Builds the /api/login + /api/auth/* routes, given a db handle. Takes the
- * db as a parameter (rather than importing the process-wide singleton from
+ * Builds the /api/login + /api/auth/* routes, given a db client. Takes the
+ * client as a parameter (rather than importing the process-wide singleton from
  * ../db) purely for testability — src/server/index.ts calls this once with
  * getDb() and mounts the result at "/api", landing at:
  *   POST /api/login
@@ -52,7 +52,7 @@ async function readPinBody(c: Context): Promise<Record<string, unknown>> {
  *   POST /api/auth/change-pin
  *   GET  /api/auth/session
  */
-export function createAuthRoute(db: Database.Database): Hono {
+export function createAuthRoute(sql: Sql): Hono {
   const authRoute = new Hono();
 
   // One backoff tracker per route instance. In the real app there is
@@ -61,8 +61,8 @@ export function createAuthRoute(db: Database.Database): Hono {
   const backoff = new LoginBackoff();
 
   /** Whether a PIN has ever been set — the client uses this to choose set-PIN vs. login. */
-  authRoute.get("/auth/status", (c) => {
-    const pinSet = Boolean(getSetting(db, PIN_HASH_KEY));
+  authRoute.get("/auth/status", async (c) => {
+    const pinSet = Boolean(await getSetting(sql, PIN_HASH_KEY));
     return c.json({ pinSet });
   });
 
@@ -72,7 +72,7 @@ export function createAuthRoute(db: Database.Database): Hono {
    * can never be used to silently reset an existing household's PIN.
    */
   authRoute.post("/auth/set-pin", async (c) => {
-    if (getSetting(db, PIN_HASH_KEY)) {
+    if (await getSetting(sql, PIN_HASH_KEY)) {
       return c.json({ error: "a PIN is already set" }, 409);
     }
 
@@ -82,8 +82,15 @@ export function createAuthRoute(db: Database.Database): Hono {
       return c.json({ error: "PIN must be 4-6 digits" }, 400);
     }
 
-    setSetting(db, PIN_HASH_KEY, hashPin(pin));
-    issueSession(c, db);
+    // Insert-if-absent, not an upsert: two racing first-run requests can't
+    // both "win" and leave the second PIN silently replacing the first.
+    const [inserted] = await sql`
+      INSERT INTO daybook_settings (key, value) VALUES (${PIN_HASH_KEY}, ${hashPin(pin)})
+      ON CONFLICT (key) DO NOTHING
+      RETURNING key
+    `;
+    if (!inserted) return c.json({ error: "a PIN is already set" }, 409);
+    await issueSession(c, sql);
     return c.json({ ok: true });
   });
 
@@ -93,7 +100,7 @@ export function createAuthRoute(db: Database.Database): Hono {
     const delay = backoff.delayForNextAttemptMs();
     if (delay > 0) await sleep(delay);
 
-    const storedHash = getSetting(db, PIN_HASH_KEY);
+    const storedHash = await getSetting(sql, PIN_HASH_KEY);
     const body = await readPinBody(c);
     const pin = typeof body.pin === "string" ? body.pin : "";
 
@@ -103,7 +110,7 @@ export function createAuthRoute(db: Database.Database): Hono {
     }
 
     backoff.recordSuccess();
-    issueSession(c, db);
+    await issueSession(c, sql);
     return c.json({ ok: true });
   });
 
@@ -117,7 +124,7 @@ export function createAuthRoute(db: Database.Database): Hono {
     const currentPin = typeof body.currentPin === "string" ? body.currentPin : "";
     const newPin = typeof body.newPin === "string" ? body.newPin : "";
 
-    const storedHash = getSetting(db, PIN_HASH_KEY);
+    const storedHash = await getSetting(sql, PIN_HASH_KEY);
     if (!storedHash || !verifyPinHash(currentPin, storedHash)) {
       // 403, not 401: the session itself is valid (middleware already
       // passed this request through) — this is a wrong-second-factor error,
@@ -129,7 +136,7 @@ export function createAuthRoute(db: Database.Database): Hono {
       return c.json({ error: "new PIN must be 4-6 digits" }, 400);
     }
 
-    setSetting(db, PIN_HASH_KEY, hashPin(newPin));
+    await setSetting(sql, PIN_HASH_KEY, hashPin(newPin));
     return c.json({ ok: true });
   });
 

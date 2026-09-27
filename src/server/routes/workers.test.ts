@@ -1,21 +1,14 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import type { Sql } from "../db";
+import { makeTestDb as makeDb } from "../testing/testDb";
 import { createSessionMiddleware } from "../middleware/session";
 import { createAuthRoute } from "./auth";
 import { createWorkersRoute } from "./workers";
 
-function makeDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.exec(readFileSync(join(process.cwd(), "schema.sql"), "utf-8"));
-  return db;
-}
-
 // Mirrors the real wiring in src/server/index.ts: session middleware first,
 // then auth + workers routes both mounted at /api.
-function makeApp(db: Database.Database) {
+function makeApp(db: Sql) {
   const app = new Hono();
   app.use("/api/*", createSessionMiddleware(db));
   app.route("/api", createAuthRoute(db));
@@ -37,7 +30,7 @@ function jsonReq(method: string, body: unknown, cookie: string) {
  * app.request, exactly like auth.test.ts. This logs in once and returns the
  * Cookie header value to attach to subsequent requests.
  */
-async function loggedInCookie(app: Hono, db: Database.Database): Promise<string> {
+async function loggedInCookie(app: Hono, db: Sql): Promise<string> {
   const res = await app.request("/api/auth/set-pin", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -52,7 +45,7 @@ async function loggedInCookie(app: Hono, db: Database.Database): Promise<string>
 
 describe("GET /api/workers/:id without a session", () => {
   it("401s — proves the shared session middleware gates the new routes too", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/workers/1");
     expect(res.status).toBe(401);
   });
@@ -60,7 +53,7 @@ describe("GET /api/workers/:id without a session", () => {
 
 describe("POST /api/workers", () => {
   it("creates a worker plus its initial rate_period and cycle_config rows at joined_on", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -72,7 +65,7 @@ describe("POST /api/workers", () => {
     const body = (await res.json()) as { id: number };
     expect(body.id).toBeGreaterThan(0);
 
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(body.id) as Record<
+    const worker = (await db`SELECT * FROM daybook_workers WHERE id = ${body.id}`)[0] as Record<
       string,
       unknown
     >;
@@ -81,21 +74,17 @@ describe("POST /api/workers", () => {
     expect(worker.paid_leaves_per_cycle).toBe(2); // default quota
     expect(worker.archived_on).toBeNull();
 
-    const rate = db
-      .prepare("SELECT * FROM rate_periods WHERE worker_id = ?")
-      .get(body.id) as Record<string, unknown>;
+    const rate = (await db`SELECT * FROM daybook_rate_periods WHERE worker_id = ${body.id}`)[0] as Record<string, unknown>;
     expect(rate.rate_rupees).toBe(250);
     expect(rate.effective_from).toBe(worker.joined_on);
 
-    const cycleConfig = db
-      .prepare("SELECT * FROM cycle_configs WHERE worker_id = ?")
-      .get(body.id) as Record<string, unknown>;
+    const cycleConfig = (await db`SELECT * FROM daybook_cycle_configs WHERE worker_id = ${body.id}`)[0] as Record<string, unknown>;
     expect(cycleConfig.start_day).toBe(1);
     expect(cycleConfig.effective_from).toBe(worker.joined_on);
   });
 
   it("rejects a cycle start day outside 1-28", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -113,7 +102,7 @@ describe("POST /api/workers", () => {
   });
 
   it("accepts an explicit quota, overriding the default of 2", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -122,7 +111,7 @@ describe("POST /api/workers", () => {
       jsonReq("POST", { name: "Ravi", rate: 300, cycleStartDay: 10, quota: 3 }, cookie),
     );
     const body = (await res.json()) as { id: number };
-    const worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(body.id) as Record<
+    const worker = (await db`SELECT * FROM daybook_workers WHERE id = ${body.id}`)[0] as Record<
       string,
       unknown
     >;
@@ -130,7 +119,7 @@ describe("POST /api/workers", () => {
   });
 
   it("shows up on GET /api/home with the running amount for all-Present days so far", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -154,7 +143,7 @@ describe("POST /api/workers", () => {
 
 describe("PATCH /api/workers/:id", () => {
   it("updates the paid-leave quota", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -171,7 +160,7 @@ describe("PATCH /api/workers/:id", () => {
   });
 
   it("archiving hides the worker from /api/home without deleting the row", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -193,7 +182,7 @@ describe("PATCH /api/workers/:id", () => {
     expect(((await afterArchive.json()) as { workers: unknown[] }).workers).toHaveLength(0);
 
     // No hard delete anywhere (SPEC.md §1.10): the row still exists.
-    const row = db.prepare("SELECT * FROM workers WHERE id = ?").get(id) as
+    const row = (await db`SELECT * FROM daybook_workers WHERE id = ${id}`)[0] as
       | Record<string, unknown>
       | undefined;
     expect(row).toBeDefined();
@@ -203,7 +192,7 @@ describe("PATCH /api/workers/:id", () => {
 
 describe("POST /api/workers/:id/rate", () => {
   it("splits the current cycle's computed amount across old and new rates from the effective-from date", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -211,15 +200,9 @@ describe("POST /api/workers/:id/rate", () => {
     // window has enough history for a mid-cycle rate split to be visible —
     // POST /api/workers alone can't exercise this (joined_on is always
     // today, so the current window only ever has one day so far).
-    db.prepare(
-      "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (100, 'Backdated', '2020-01-01', 2)",
-    ).run();
-    db.prepare(
-      "INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (100, 200, '2020-01-01')",
-    ).run();
-    db.prepare(
-      "INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (100, 1, '2020-01-01')",
-    ).run();
+    await db`INSERT INTO daybook_workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (100, 'Backdated', '2020-01-01', 2)`;
+    await db`INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from) VALUES (100, 200, '2020-01-01')`;
+    await db`INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from) VALUES (100, 1, '2020-01-01')`;
 
     const res = await app.request(
       "/api/workers/100/rate",
@@ -254,7 +237,7 @@ describe("POST /api/workers/:id/rate", () => {
   });
 
   it("rejects a non-positive rate", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -271,19 +254,13 @@ describe("POST /api/workers/:id/rate", () => {
 
 describe("POST /api/workers/:id/cycle-config", () => {
   it("defers effective_from to the day after the CURRENT window ends, not today", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
-    db.prepare(
-      "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (200, 'Cyclic', '2020-01-01', 2)",
-    ).run();
-    db.prepare(
-      "INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (200, 200, '2020-01-01')",
-    ).run();
-    db.prepare(
-      "INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (200, 1, '2020-01-01')",
-    ).run();
+    await db`INSERT INTO daybook_workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (200, 'Cyclic', '2020-01-01', 2)`;
+    await db`INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from) VALUES (200, 200, '2020-01-01')`;
+    await db`INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from) VALUES (200, 1, '2020-01-01')`;
 
     const detailBefore = await app.request("/api/workers/200", { headers: { cookie } });
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -313,7 +290,7 @@ describe("POST /api/workers/:id/cycle-config", () => {
   });
 
   it("rejects a start day outside 1-28", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 
@@ -333,7 +310,7 @@ describe("POST /api/workers/:id/cycle-config", () => {
 
 describe("GET /api/workers/:id/cycles", () => {
   it("404s for a worker that doesn't exist", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app, db);
 

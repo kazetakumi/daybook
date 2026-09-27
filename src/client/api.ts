@@ -226,7 +226,7 @@ export async function downloadBackup(): Promise<OkOrError> {
 
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") ?? "";
-  const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] ?? "daybook-backup.sqlite";
+  const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] ?? "daybook-backup.json";
 
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

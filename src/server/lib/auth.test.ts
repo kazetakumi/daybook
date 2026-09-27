@@ -1,5 +1,5 @@
-import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
+import { makeTestDb } from "../testing/testDb";
 import {
   BACKOFF_BASE_MS,
   BACKOFF_THRESHOLD,
@@ -12,12 +12,6 @@ import {
   verifyPinHash,
   verifySessionToken,
 } from "./auth";
-
-function makeSettingsDb() {
-  const db = new Database(":memory:");
-  db.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
-  return db;
-}
 
 describe("isValidPin", () => {
   it.each(["1234", "12345", "123456"])("accepts %s (4-6 digits)", (pin) => {
@@ -55,12 +49,18 @@ describe("hashPin / verifyPinHash", () => {
 });
 
 describe("getSessionSecret", () => {
-  it("is generated once per db and persisted, not regenerated per call", () => {
-    const db = makeSettingsDb();
-    const first = getSessionSecret(db);
-    const second = getSessionSecret(db);
+  it("is generated once per db and persisted, not regenerated per call", async () => {
+    const db = await makeTestDb();
+    const first = await getSessionSecret(db);
+    const second = await getSessionSecret(db);
     expect(second).toBe(first);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("settles on a single secret when two first callers race", async () => {
+    const db = await makeTestDb();
+    const [a, b] = await Promise.all([getSessionSecret(db), getSessionSecret(db)]);
+    expect(b).toBe(a);
   });
 });
 

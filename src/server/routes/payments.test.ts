@@ -1,21 +1,14 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import type { Sql } from "../db";
+import { makeTestDb as makeDb } from "../testing/testDb";
 import { createSessionMiddleware } from "../middleware/session";
 import { createAuthRoute } from "./auth";
 import { createWorkersRoute } from "./workers";
 import { createPaymentsRoute } from "./payments";
 
-function makeDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.exec(readFileSync(join(process.cwd(), "schema.sql"), "utf-8"));
-  return db;
-}
-
 // Mirrors the real wiring in src/server/index.ts.
-function makeApp(db: Database.Database) {
+function makeApp(db: Sql) {
   const app = new Hono();
   app.use("/api/*", createSessionMiddleware(db));
   app.route("/api", createAuthRoute(db));
@@ -45,21 +38,15 @@ async function loggedInCookie(app: Hono): Promise<string> {
 }
 
 /** A Worker backdated well before "today" with one fully-closed cycle (Jan 2020, day 1-31 at ₹200/day, no marks). */
-function seedBackdatedWorker(db: Database.Database, id: number): void {
-  db.prepare(
-    "INSERT INTO workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (?, 'Backdated', '2020-01-01', 2)",
-  ).run(id);
-  db.prepare(
-    "INSERT INTO rate_periods (worker_id, rate_rupees, effective_from) VALUES (?, 200, '2020-01-01')",
-  ).run(id);
-  db.prepare("INSERT INTO cycle_configs (worker_id, start_day, effective_from) VALUES (?, 1, '2020-01-01')").run(
-    id,
-  );
+async function seedBackdatedWorker(db: Sql, id: number): Promise<void> {
+  await db`INSERT INTO daybook_workers (id, name, joined_on, paid_leaves_per_cycle) VALUES (${id}, 'Backdated', '2020-01-01', 2)`;
+  await db`INSERT INTO daybook_rate_periods (worker_id, rate_rupees, effective_from) VALUES (${id}, 200, '2020-01-01')`;
+  await db`INSERT INTO daybook_cycle_configs (worker_id, start_day, effective_from) VALUES (${id}, 1, '2020-01-01')`;
 }
 
 describe("POST /api/payments without a session", () => {
   it("401s — proves the shared session middleware gates this route too", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/payments", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -71,10 +58,10 @@ describe("POST /api/payments without a session", () => {
 
 describe("POST /api/payments", () => {
   it("inserts a Payment snapshot with the server-recomputed total, not a client-supplied amount", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
-    seedBackdatedWorker(db, 100);
+    await seedBackdatedWorker(db, 100);
 
     // 31 Present days at ₹200 = ₹6,200. Send a bogus client-side amount to
     // prove the server ignores it and recomputes its own (SPEC.md §1.9 / ADR-0001).
@@ -92,16 +79,16 @@ describe("POST /api/payments", () => {
     expect(body.periodStart).toBe("2020-01-01");
     expect(body.periodEnd).toBe("2020-01-31");
 
-    const row = db.prepare("SELECT * FROM payments WHERE worker_id = 100").get() as Record<string, unknown>;
+    const row = (await db`SELECT * FROM daybook_payments WHERE worker_id = 100`)[0] as Record<string, unknown>;
     expect(row.amount_rupees).toBe(6200);
     expect(row.paid_on).toBe(body.paidOn);
   });
 
   it("is idempotent — a second call for the same window returns the existing snapshot, no duplicate row", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
-    seedBackdatedWorker(db, 101);
+    await seedBackdatedWorker(db, 101);
 
     const first = await app.request(
       "/api/payments",
@@ -111,7 +98,7 @@ describe("POST /api/payments", () => {
 
     // Change the day after — a Payment snapshot must never reflect this,
     // and re-posting must not create a second row or move the amount.
-    db.prepare("INSERT INTO marks (worker_id, date, state) VALUES (101, '2020-01-10', 'off')").run();
+    await db`INSERT INTO daybook_marks (worker_id, date, state) VALUES (101, '2020-01-10', 'off')`;
 
     const second = await app.request(
       "/api/payments",
@@ -121,15 +108,15 @@ describe("POST /api/payments", () => {
     const secondBody = (await second.json()) as { amount: number };
     expect(secondBody.amount).toBe(6200); // unchanged snapshot, not the new (drifted) total
 
-    const rows = db.prepare("SELECT * FROM payments WHERE worker_id = 101").all();
+    const rows = (await db`SELECT * FROM daybook_payments WHERE worker_id = 101`);
     expect(rows).toHaveLength(1);
   });
 
   it("rejects a window that hasn't closed yet", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
-    seedBackdatedWorker(db, 102);
+    await seedBackdatedWorker(db, 102);
 
     const cyclesRes = await app.request("/api/workers/102/cycles", { headers: { cookie } });
     const cyclesBody = (await cyclesRes.json()) as { current: { window: { start: string; end: string } } };
@@ -146,7 +133,7 @@ describe("POST /api/payments", () => {
   });
 
   it("404s for a worker that doesn't exist", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -158,10 +145,10 @@ describe("POST /api/payments", () => {
   });
 
   it("400s on a malformed date range", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
-    seedBackdatedWorker(db, 103);
+    await seedBackdatedWorker(db, 103);
 
     const res = await app.request(
       "/api/payments",
@@ -173,7 +160,7 @@ describe("POST /api/payments", () => {
 
 describe("GET /api/payments/:workerId", () => {
   it("404s for a worker that doesn't exist", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
 
@@ -182,10 +169,10 @@ describe("GET /api/payments/:workerId", () => {
   });
 
   it("lists Payments oldest window first, and reflects Drift (computed vs. stored) when a day is edited after payday", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const cookie = await loggedInCookie(app);
-    seedBackdatedWorker(db, 104);
+    await seedBackdatedWorker(db, 104);
 
     await app.request(
       "/api/payments",
@@ -204,7 +191,7 @@ describe("GET /api/payments/:workerId", () => {
     // writing the mark row directly — same effect a PUT /api/marks would
     // have. An Off day pays half-rate, so the live total must now be lower
     // than the frozen Payment, i.e. the Settle pane's Drift banner condition.
-    db.prepare("INSERT INTO marks (worker_id, date, state) VALUES (104, '2020-01-15', 'off')").run();
+    await db`INSERT INTO daybook_marks (worker_id, date, state) VALUES (104, '2020-01-15', 'off')`;
 
     const cyclesRes = await app.request("/api/workers/104/cycles?before=2020-02-01", { headers: { cookie } });
     const cyclesBody = (await cyclesRes.json()) as {
@@ -220,7 +207,7 @@ describe("GET /api/payments/:workerId", () => {
     // Revert the edit: drift must disappear (computed total matches the
     // Payment again), per ADR-0001 — nothing is silently reconciled, but
     // nothing should stay drifted once the underlying edit is undone either.
-    db.prepare("DELETE FROM marks WHERE worker_id = 104 AND date = '2020-01-15'").run();
+    await db`DELETE FROM daybook_marks WHERE worker_id = 104 AND date = '2020-01-15'`;
     const revertedRes = await app.request("/api/workers/104/cycles?before=2020-02-01", { headers: { cookie } });
     const revertedBody = (await revertedRes.json()) as {
       past: Array<{ window: { start: string; end: string }; settlement: { total: number } }>;

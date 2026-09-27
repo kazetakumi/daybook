@@ -1,13 +1,13 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type Database from "better-sqlite3";
+import type { Sql } from "../db";
 import { loadWorker, todayISO } from "../lib/workers";
 
 // Marking days (ticket 05 — SPEC.md §1.3-§1.5, §7). Mounted at "/api/marks"
 // from src/server/index.ts (same pattern as routes/workers.ts), landing at:
 //   PUT /api/marks/:workerId/:date   {state: 'leave'|'off'|'present'}
 //   GET /api/marks/:workerId?from=&to=
-// Marks are exceptions-only storage (schema.sql: present = no row) — PUT
+// Marks are exceptions-only storage (daybook_marks: present = no row) — PUT
 // with state 'present' deletes the row rather than writing one.
 
 function isISODate(s: unknown): s is string {
@@ -23,14 +23,14 @@ async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
   }
 }
 
-export function createMarksRoute(db: Database.Database): Hono {
+export function createMarksRoute(sql: Sql): Hono {
   const route = new Hono();
 
   route.put("/:workerId/:date", async (c) => {
     const workerId = Number(c.req.param("workerId"));
     const date = c.req.param("date");
 
-    const worker = loadWorker(db, workerId);
+    const worker = await loadWorker(sql, workerId);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     if (!isISODate(date)) {
@@ -57,20 +57,20 @@ export function createMarksRoute(db: Database.Database): Hono {
     }
 
     if (state === "present") {
-      db.prepare("DELETE FROM marks WHERE worker_id = ? AND date = ?").run(workerId, date);
+      await sql`DELETE FROM daybook_marks WHERE worker_id = ${workerId} AND date = ${date}`;
     } else {
-      db.prepare(
-        `INSERT INTO marks (worker_id, date, state) VALUES (?, ?, ?)
-         ON CONFLICT(worker_id, date) DO UPDATE SET state = excluded.state`,
-      ).run(workerId, date, state);
+      await sql`
+        INSERT INTO daybook_marks (worker_id, date, state) VALUES (${workerId}, ${date}, ${state})
+        ON CONFLICT (worker_id, date) DO UPDATE SET state = excluded.state
+      `;
     }
 
     return c.json({ ok: true, workerId, date, state });
   });
 
-  route.get("/:workerId", (c) => {
+  route.get("/:workerId", async (c) => {
     const workerId = Number(c.req.param("workerId"));
-    const worker = loadWorker(db, workerId);
+    const worker = await loadWorker(sql, workerId);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     const from = c.req.query("from");
@@ -82,16 +82,14 @@ export function createMarksRoute(db: Database.Database): Hono {
       return c.json({ error: "to must be an ISO date" }, 400);
     }
 
+    type MarkRow = { date: string; state: "leave" | "off" };
     const rows =
       from !== undefined && to !== undefined
-        ? (db
-            .prepare(
-              "SELECT date, state FROM marks WHERE worker_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
-            )
-            .all(workerId, from, to) as Array<{ date: string; state: "leave" | "off" }>)
-        : (db
-            .prepare("SELECT date, state FROM marks WHERE worker_id = ? ORDER BY date ASC")
-            .all(workerId) as Array<{ date: string; state: "leave" | "off" }>);
+        ? await sql<MarkRow[]>`
+            SELECT date, state FROM daybook_marks
+            WHERE worker_id = ${workerId} AND date >= ${from} AND date <= ${to} ORDER BY date ASC
+          `
+        : await sql<MarkRow[]>`SELECT date, state FROM daybook_marks WHERE worker_id = ${workerId} ORDER BY date ASC`;
 
     return c.json({ marks: rows });
   });

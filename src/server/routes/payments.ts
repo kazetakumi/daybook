@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import type Database from "better-sqlite3";
+import type { Sql } from "../db";
 import { computeSettlement } from "../../shared/settlement";
 import { loadMarks, loadRatePeriods, loadWorker, todayISO } from "../lib/workers";
 
@@ -49,22 +49,21 @@ function isISODate(s: unknown): s is string {
   return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
-export function createPaymentsRoute(db: Database.Database): Hono {
+export function createPaymentsRoute(sql: Sql): Hono {
   const route = new Hono();
 
   /** GET /api/payments/:workerId — all Payment snapshots, oldest window first. */
-  route.get("/:workerId", (c) => {
+  route.get("/:workerId", async (c) => {
     const workerId = Number(c.req.param("workerId"));
     if (!Number.isInteger(workerId)) return c.json({ error: "invalid worker id" }, 400);
 
-    const worker = loadWorker(db, workerId);
+    const worker = await loadWorker(sql, workerId);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
-    const rows = db
-      .prepare(
-        "SELECT id, worker_id, period_start, period_end, amount_rupees, paid_on FROM payments WHERE worker_id = ? ORDER BY period_start ASC",
-      )
-      .all(workerId) as PaymentRow[];
+    const rows = await sql<PaymentRow[]>`
+      SELECT id, worker_id, period_start, period_end, amount_rupees, paid_on FROM daybook_payments
+      WHERE worker_id = ${workerId} ORDER BY period_start ASC
+    `;
 
     return c.json({ payments: rows.map(toApiPayment) });
   });
@@ -94,7 +93,7 @@ export function createPaymentsRoute(db: Database.Database): Hono {
       return c.json({ error: "periodStart must not be after periodEnd" }, 400);
     }
 
-    const worker = loadWorker(db, workerId);
+    const worker = await loadWorker(sql, workerId);
     if (!worker) return c.json({ error: "worker not found" }, 404);
 
     const today = todayISO();
@@ -102,17 +101,19 @@ export function createPaymentsRoute(db: Database.Database): Hono {
       return c.json({ error: "this cycle hasn't closed yet" }, 400);
     }
 
-    const existing = db
-      .prepare(
-        "SELECT id, worker_id, period_start, period_end, amount_rupees, paid_on FROM payments WHERE worker_id = ? AND period_start = ? AND period_end = ?",
-      )
-      .get(workerId, periodStart, periodEnd) as PaymentRow | undefined;
+    const findExisting = async () => {
+      const [row] = await sql<PaymentRow[]>`
+        SELECT id, worker_id, period_start, period_end, amount_rupees, paid_on FROM daybook_payments
+        WHERE worker_id = ${workerId} AND period_start = ${periodStart} AND period_end = ${periodEnd}
+      `;
+      return row;
+    };
+    const existing = await findExisting();
     if (existing) {
       return c.json(toApiPayment(existing));
     }
 
-    const ratePeriods = loadRatePeriods(db, workerId);
-    const marks = loadMarks(db, workerId);
+    const [ratePeriods, marks] = await Promise.all([loadRatePeriods(sql, workerId), loadMarks(sql, workerId)]);
     const settlement = computeSettlement(
       worker,
       { start: periodStart, end: periodEnd, open: false },
@@ -122,9 +123,17 @@ export function createPaymentsRoute(db: Database.Database): Hono {
     );
 
     const paidOn = today;
-    db.prepare(
-      "INSERT INTO payments (worker_id, period_start, period_end, amount_rupees, paid_on) VALUES (?, ?, ?, ?, ?)",
-    ).run(workerId, periodStart, periodEnd, settlement.total, paidOn);
+    const [inserted] = await sql`
+      INSERT INTO daybook_payments (worker_id, period_start, period_end, amount_rupees, paid_on)
+      VALUES (${workerId}, ${periodStart}, ${periodEnd}, ${settlement.total}, ${paidOn})
+      ON CONFLICT (worker_id, period_start, period_end) DO NOTHING
+      RETURNING id
+    `;
+    // A concurrent double-tap got there first — hand back its snapshot, as above.
+    if (!inserted) {
+      const winner = await findExisting();
+      if (winner) return c.json(toApiPayment(winner));
+    }
 
     return c.json({ periodStart, periodEnd, amount: settlement.total, paidOn });
   });

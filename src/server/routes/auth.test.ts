@@ -1,20 +1,13 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import Database from "better-sqlite3";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import type { Sql } from "../db";
+import { makeTestDb as makeDb } from "../testing/testDb";
 import { createSessionMiddleware } from "../middleware/session";
 import { createAuthRoute } from "./auth";
 
-function makeDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.exec(readFileSync(join(process.cwd(), "schema.sql"), "utf-8"));
-  return db;
-}
-
 // Mirrors the real wiring in src/server/index.ts: session middleware first,
 // then the auth routes mounted at /api.
-function makeApp(db: Database.Database) {
+function makeApp(db: Sql) {
   const app = new Hono();
   app.use("/api/*", createSessionMiddleware(db));
   app.route("/api", createAuthRoute(db));
@@ -38,14 +31,14 @@ function extractCookie(res: Response): string {
 
 describe("GET /api/auth/status", () => {
   it("reports pinSet: false on a fresh database", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/auth/status");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pinSet: false });
   });
 
   it("reports pinSet: true once a PIN has been set", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "1234" }));
     const res = await app.request("/api/auth/status");
@@ -55,13 +48,13 @@ describe("GET /api/auth/status", () => {
 
 describe("POST /api/auth/set-pin", () => {
   it("hashes the PIN into settings.pin_hash — never plaintext — and logs in", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
 
     const res = await app.request("/api/auth/set-pin", jsonPost({ pin: "1234" }));
     expect(res.status).toBe(200);
 
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'pin_hash'").get() as
+    const row = (await db`SELECT value FROM daybook_settings WHERE key = 'pin_hash'`)[0] as
       | { value: string }
       | undefined;
     expect(row).toBeDefined();
@@ -76,13 +69,13 @@ describe("POST /api/auth/set-pin", () => {
   });
 
   it("rejects a PIN outside 4-6 digits", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/auth/set-pin", jsonPost({ pin: "12" }));
     expect(res.status).toBe(400);
   });
 
   it("refuses to overwrite an existing PIN (no auth required to hit this route)", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "1234" }));
     const res = await app.request("/api/auth/set-pin", jsonPost({ pin: "5678" }));
@@ -92,7 +85,7 @@ describe("POST /api/auth/set-pin", () => {
 
 describe("POST /api/login", () => {
   it("issues a session cookie on the correct PIN", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "4321" }));
 
@@ -102,7 +95,7 @@ describe("POST /api/login", () => {
   });
 
   it("rejects the wrong PIN with 401 and no cookie", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "4321" }));
 
@@ -112,13 +105,13 @@ describe("POST /api/login", () => {
   });
 
   it("rejects login before any PIN has been set", async () => {
-    const app = makeApp(makeDb());
+    const app = makeApp(await makeDb());
     const res = await app.request("/api/login", jsonPost({ pin: "1234" }));
     expect(res.status).toBe(401);
   });
 
   it("a session survives a simulated process restart (secret persisted in settings, not memory)", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     let app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "9999" }));
     const loginRes = await app.request("/api/login", jsonPost({ pin: "9999" }));
@@ -134,7 +127,7 @@ describe("POST /api/login", () => {
 
 describe("GET /api/auth/session", () => {
   it("401s without a session and 200s with one", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const loggedOut = await app.request("/api/auth/session");
     expect(loggedOut.status).toBe(401);
@@ -148,7 +141,7 @@ describe("GET /api/auth/session", () => {
 
 describe("POST /api/auth/change-pin", () => {
   it("requires a valid session — 401 with no cookie", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     await app.request("/api/auth/set-pin", jsonPost({ pin: "1111" }));
 
@@ -160,7 +153,7 @@ describe("POST /api/auth/change-pin", () => {
   });
 
   it("requires the correct current PIN even with a valid session — 403, not 401", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const setupRes = await app.request("/api/auth/set-pin", jsonPost({ pin: "1111" }));
     const cookie = extractCookie(setupRes);
@@ -173,7 +166,7 @@ describe("POST /api/auth/change-pin", () => {
   });
 
   it("changes the PIN: old PIN stops working, new PIN logs in", async () => {
-    const db = makeDb();
+    const db = await makeDb();
     const app = makeApp(db);
     const setupRes = await app.request("/api/auth/set-pin", jsonPost({ pin: "1111" }));
     const cookie = extractCookie(setupRes);

@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Sql } from "../db";
 import type { CycleConfig, ISODate, Mark, RatePeriod, Worker } from "../../shared/settlement";
 
 // Row <-> domain mapping and small read helpers shared by the workers route
@@ -61,41 +61,43 @@ function rowToWorker(row: WorkerRow): Worker {
   };
 }
 
-export function loadWorker(db: Database.Database, id: number): Worker | null {
-  const row = db.prepare("SELECT * FROM workers WHERE id = ?").get(id) as WorkerRow | undefined;
+/** Postgres `integer` bounds — anything outside can't be a row id, and would error if sent as one. */
+function isIntId(id: number): boolean {
+  return Number.isInteger(id) && id >= 1 && id <= 2_147_483_647;
+}
+
+export async function loadWorker(sql: Sql, id: number): Promise<Worker | null> {
+  if (!isIntId(id)) return null;
+  const [row] = await sql<WorkerRow[]>`SELECT * FROM daybook_workers WHERE id = ${id}`;
   return row ? rowToWorker(row) : null;
 }
 
 /** Active (non-archived) Workers, for the Home cards list. */
-export function listActiveWorkers(db: Database.Database): Worker[] {
-  const rows = db
-    .prepare("SELECT * FROM workers WHERE archived_on IS NULL ORDER BY id ASC")
-    .all() as WorkerRow[];
+export async function listActiveWorkers(sql: Sql): Promise<Worker[]> {
+  const rows = await sql<WorkerRow[]>`SELECT * FROM daybook_workers WHERE archived_on IS NULL ORDER BY id ASC`;
   return rows.map(rowToWorker);
 }
 
-export function loadRatePeriods(db: Database.Database, workerId: number): RatePeriod[] {
-  const rows = db
-    .prepare(
-      "SELECT rate_rupees, effective_from FROM rate_periods WHERE worker_id = ? ORDER BY effective_from ASC, id ASC",
-    )
-    .all(workerId) as RatePeriodRow[];
+export async function loadRatePeriods(sql: Sql, workerId: number): Promise<RatePeriod[]> {
+  const rows = await sql<RatePeriodRow[]>`
+    SELECT rate_rupees, effective_from FROM daybook_rate_periods
+    WHERE worker_id = ${workerId} ORDER BY effective_from ASC, id ASC
+  `;
   return rows.map((r) => ({ rateRupees: r.rate_rupees, effectiveFrom: r.effective_from }));
 }
 
-export function loadCycleConfigs(db: Database.Database, workerId: number): CycleConfig[] {
-  const rows = db
-    .prepare(
-      "SELECT start_day, effective_from FROM cycle_configs WHERE worker_id = ? ORDER BY effective_from ASC, id ASC",
-    )
-    .all(workerId) as CycleConfigRow[];
+export async function loadCycleConfigs(sql: Sql, workerId: number): Promise<CycleConfig[]> {
+  const rows = await sql<CycleConfigRow[]>`
+    SELECT start_day, effective_from FROM daybook_cycle_configs
+    WHERE worker_id = ${workerId} ORDER BY effective_from ASC, id ASC
+  `;
   return rows.map((r) => ({ startDay: r.start_day, effectiveFrom: r.effective_from }));
 }
 
-export function loadMarks(db: Database.Database, workerId: number): Mark[] {
-  const rows = db
-    .prepare("SELECT date, state FROM marks WHERE worker_id = ? ORDER BY date ASC")
-    .all(workerId) as MarkRow[];
+export async function loadMarks(sql: Sql, workerId: number): Promise<Mark[]> {
+  const rows = await sql<MarkRow[]>`
+    SELECT date, state FROM daybook_marks WHERE worker_id = ${workerId} ORDER BY date ASC
+  `;
   return rows.map((r) => ({ date: r.date, state: r.state }));
 }
 
