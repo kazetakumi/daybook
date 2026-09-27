@@ -19,7 +19,7 @@ import { todayISO } from "../lib/workers";
  * The migration the export's shape corresponds to — bump alongside any
  * supabase/migrations/ change that alters these tables.
  */
-export const BACKUP_SCHEMA_VERSION = "20260927120000";
+export const BACKUP_SCHEMA_VERSION = "20260927025819";
 
 export function createBackupRoute(sql: Sql): Hono {
   const route = new Hono();
