@@ -24,22 +24,27 @@ function avatarColor(id: number): string {
 export default function WorkerHub({ workerId, onBack }: { workerId: number; onBack: () => void }) {
   const data = useWorkerCycle(workerId);
   const [pane, setPane] = useState<Pane>("cycle");
+  const hasData = data.worker !== null && data.current !== null;
 
+  // "Loading…" replaces the hub only on the very first fetch. A refresh()
+  // after a mutation keeps the hub mounted on the previous data until the new
+  // data lands — unmounting it would throw away pane state such as which
+  // Cycle window the calendar is showing.
   return (
     <div className="screen">
       <button className="btn-secondary" type="button" onClick={onBack}>
         &larr; Workers
       </button>
 
-      {data.loading && <p className="muted">Loading…</p>}
+      {data.loading && !hasData && <p className="muted">Loading…</p>}
 
-      {!data.loading && (data.error || !data.worker || !data.current) && (
+      {!data.loading && (data.error || !hasData) && (
         <p className="muted" role="alert">
           {data.error ?? "Could not load this worker."}
         </p>
       )}
 
-      {!data.loading && data.worker && data.current && (
+      {data.worker && data.current && (
         <HubBody
           worker={data.worker}
           current={data.current}
