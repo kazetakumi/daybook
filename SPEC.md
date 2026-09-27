@@ -22,44 +22,22 @@ Build-ready spec assembled 2026-07-15 from the wayfinder map (`.wayfinder/map.md
 10. **Archiving** hides a Worker from daily marking; history and Payments are kept forever. No hard delete. The final partial cycle ends on the archived date.
 11. Money: Rates are whole ₹; per-day math keeps exact ₹.50 (from Off days); each cycle **total rounds UP** to the whole rupee. Display with `en-IN` grouping.
 
-## 2. Data model — SQLite (better-sqlite3, raw SQL)
+## 2. Data model — Supabase Postgres (postgres.js, raw SQL)
 
-`schema.sql`:
+Six `daybook_*` tables in the `public` schema of the shared **kaze-master-in** Supabase project (ap-south-1), alongside other apps' prefixed tables. The schema's source of truth is [`supabase/migrations/`](supabase/migrations/) — applied deliberately, never by the server at startup. See [ADR 0002](docs/adr/0002-supabase-postgres-behind-the-pin-gated-server.md).
 
-```sql
-CREATE TABLE workers (
-  id                    INTEGER PRIMARY KEY,
-  name                  TEXT NOT NULL,
-  role                  TEXT,                      -- optional label, e.g. 'Maid'
-  joined_on             TEXT NOT NULL,             -- ISO date
-  archived_on           TEXT,                      -- ISO date or NULL
-  paid_leaves_per_cycle INTEGER NOT NULL DEFAULT 2
-);
-CREATE TABLE rate_periods (
-  id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES workers(id),
-  rate_rupees INTEGER NOT NULL,
-  effective_from TEXT NOT NULL                     -- first row = joined_on
-);
-CREATE TABLE cycle_configs (
-  id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES workers(id),
-  start_day INTEGER NOT NULL CHECK (start_day BETWEEN 1 AND 28),
-  effective_from TEXT NOT NULL                     -- first row = joined_on
-);
-CREATE TABLE marks (
-  worker_id INTEGER NOT NULL REFERENCES workers(id),
-  date TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('leave','off')),
-  PRIMARY KEY (worker_id, date)                    -- present = no row
-);
-CREATE TABLE payments (
-  id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES workers(id),
-  period_start TEXT NOT NULL, period_end TEXT NOT NULL,
-  amount_rupees INTEGER NOT NULL, paid_on TEXT NOT NULL
-);
-CREATE TABLE settings ( key TEXT PRIMARY KEY, value TEXT NOT NULL );  -- pin_hash, …
-```
+| Table | Columns |
+|---|---|
+| `daybook_workers` | `id` integer identity PK · `name` · `role` (optional label, e.g. 'Maid') · `joined_on` date · `archived_on` date or NULL · `paid_leaves_per_cycle` integer default 2 |
+| `daybook_rate_periods` | `id` · `worker_id` → workers · `rate_rupees` integer · `effective_from` date (first row = joined_on) |
+| `daybook_cycle_configs` | `id` · `worker_id` → workers · `start_day` integer CHECK 1–28 · `effective_from` date (first row = joined_on) |
+| `daybook_marks` | PK (`worker_id`, `date`) · `state` CHECK in ('leave','off') — present = no row |
+| `daybook_payments` | `id` · `worker_id` → workers · `period_start` · `period_end` · `amount_rupees` · `paid_on`; UNIQUE (`worker_id`, `period_start`, `period_end`) |
+| `daybook_settings` | `key` PK · `value` — `pin_hash`, `session_secret` |
 
-Dates are ISO `YYYY-MM-DD` strings throughout (lexicographic compare = chronological).
+RLS is enabled on every table with **no policies**, so Supabase's Data API (anon/authenticated keys) sees nothing; only the Hono server, connecting as the database owner via `DATABASE_URL`, reads or writes. Access control stays the family PIN (§5).
+
+Dates are ISO `YYYY-MM-DD` strings throughout the app (lexicographic compare = chronological). They are stored as Postgres `date` and read back as the same string — `src/server/db.ts` overrides postgres.js's default of turning them into JS `Date`s, which would shift a day in IST.
 
 ## 3. Salary calculation — pure function + fixtures
 
@@ -101,9 +79,9 @@ Reference implementation of look/feel: `prototype/ui-variants.html`, **Variant C
 
 Defaults chosen at spec time; build as stated:
 
-- One shared PIN, 4–6 digits. Stored in `settings.pin_hash` as **scrypt** (Node `crypto.scrypt`, per-hash random salt).
+- One shared PIN, 4–6 digits. Stored in `daybook_settings.pin_hash` as **scrypt** (Node `crypto.scrypt`, per-hash random salt).
 - First run (no `pin_hash`): the app serves a set-PIN screen; setting it requires confirmation entry.
-- Login: PIN entry → on success a **signed HttpOnly SameSite=Lax session cookie**, 180-day expiry, HMAC key kept in `settings`. All `/api/*` except login/health require it. Client shows the PIN screen on any 401.
+- Login: PIN entry → on success a **signed HttpOnly SameSite=Lax session cookie**, 180-day expiry, HMAC key kept in `daybook_settings`. All `/api/*` except login/health require it. Client shows the PIN screen on any 401.
 - Brute-force damping: global exponential backoff — after 5 consecutive failures, delay responses 2 s, doubling per failure, reset on success (client IPs behind the Funnel aren't trustworthy, so the counter is global).
 - Change PIN (in Settings) requires the current PIN.
 
@@ -113,14 +91,14 @@ Defaults chosen at spec time; build as stated:
 
 ## 7. Stack, layout, run
 
-- **Client:** Vite + React + TypeScript. **Server:** Hono on `@hono/node-server`, also serving the built client via `serve-static` — one process, one port (default **3000**). **DB:** better-sqlite3, raw SQL, `data/daybook.sqlite` (gitignored). **Tests:** Vitest on `computeSettlement` + cycle generation (§3 fixtures).
+- **Client:** Vite + React + TypeScript. **Server:** Hono on `@hono/node-server`, also serving the built client via `serve-static` — one process, one port (default **3000**). **DB:** Supabase Postgres via postgres.js, raw SQL (§2); `DATABASE_URL` comes from `.env` (gitignored — see `.env.example`). **Tests:** Vitest on `computeSettlement` + cycle generation (§3 fixtures); server tests run against a *local* Postgres named by `TEST_DATABASE_URL`, each in a throwaway schema.
 - API sketch: `POST /api/login` · `GET /api/home` (cards data) · `POST /api/workers` · `PATCH /api/workers/:id` (quota/archive) · `POST /api/workers/:id/rate` `{rate, effectiveFrom}` · `POST /api/workers/:id/cycle-config` `{startDay}` · `PUT /api/marks/:workerId/:date` `{state: 'leave'|'off'|'present'}` (present deletes) · `GET /api/workers/:id/cycles?before=` (windows + settlements) · `POST /api/payments` · `GET /api/backup`.
 - Scripts: `npm run dev` (Vite + server, proxied), `npm run build`, `npm start` (serve built app), `npm test`.
 - The public origin is config (`PUBLIC_ORIGIN` env), not hardcoded.
 
 ## 8. Backup (ticket 010)
 
-`GET /api/backup` (authed) streams a snapshot taken with better-sqlite3's `db.backup()` — never a raw file copy of the live DB — as `daybook-YYYY-MM-DD.sqlite`. Exposed as **Download backup** in Settings. No automatic backups in phase 1.
+`GET /api/backup` (authed) downloads `daybook-YYYY-MM-DD.json`: every row of the five data tables, read inside one `REPEATABLE READ` transaction so it's a consistent snapshot while the app is in use. `daybook_settings` is excluded — the PIN hash and session key don't belong in a file on a phone. Exposed as **Download backup** in Settings. No automatic backups in phase 1 (Supabase's own backups cover the whole shared project, not one app's rows).
 
 ## 9. Hosting — Tailscale Funnel (ticket 002)
 
@@ -145,5 +123,5 @@ Full research: `.wayfinder/research/reminder-delivery.md`. No in-app code beyond
 - [ ] Home marking, calendar tap-cycling, Mark paid, Drift display, rate change with mid-cycle split, cycle-day change with stub, archive — all work as specced against CONTEXT.md language.
 - [ ] PIN gate on every API route; session survives browser restarts; backoff works.
 - [ ] Share produces the §6 text via share sheet on Android Chrome and iOS Safari (clipboard fallback verified).
-- [ ] Backup downloads and opens as a valid SQLite file while the app is running.
+- [ ] Backup downloads as valid JSON containing every data table while the app is running.
 - [ ] App reachable and usable from a phone on mobile data via the Funnel URL.

@@ -1,4 +1,4 @@
-# Daybook — ops setup: Tailscale Funnel + ntfy reminders
+# Daybook — ops setup: database, Tailscale Funnel + ntfy reminders
 
 This is a **you-do-this, not the agent** checklist (SPEC.md §9–§10). It covers
 three things, in order:
@@ -19,7 +19,26 @@ created, no scheduled tasks registered.
 
 ---
 
-## Part 0 — before you start: run the production build, not `npm run dev`
+## Part 0a — database connection (`.env`)
+
+Daybook's data lives in Supabase (the `daybook_*` tables in the
+kaze-master-in project — SPEC.md §2, ADR 0002). The server and
+`scripts/next-cycle-end.ts` both read the connection string from `.env` in
+the project root, which is gitignored:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then set `DATABASE_URL` to the **session pooler** string from the Supabase
+dashboard (Project → Connect → Session pooler), with the database password
+filled in. The server refuses to start if `DATABASE_URL` is missing or the
+`daybook_*` tables don't exist yet; it tells you which one.
+
+The schema comes from `supabase/migrations/` and is applied once, not by
+the server. A new migration file is how any future schema change ships.
+
+## Part 0b — run the production build, not `npm run dev`
 
 Tailscale Funnel forwards `https://<your-url>` straight to `localhost:3000`.
 In `npm run dev`, the Hono server on port 3000 only answers `/api/*` — the
@@ -27,7 +46,7 @@ actual UI is served separately by Vite on its own dev port and won't be
 reachable through the Funnel. Family phones need the **built** app served
 from port 3000.
 
-From the project root (`D:\kaze\POCs\attendence`):
+From the project root (the deployed copy, `D:\kaze\Live Ones\Deployments\apps\daybook`):
 
 ```powershell
 npm run build
@@ -98,7 +117,7 @@ browser, click to enable it, then re-run the same `tailscale funnel --bg
 reboots** without you doing anything else — you do not need a scheduled
 task to re-run this command. (You do still need `npm start` running for
 there to be anything listening on port 3000 for it to forward to — see
-Part 0.)
+Part 0b.)
 
 ### 1.5 Record the URL and verify
 
@@ -214,7 +233,7 @@ below asks you to write code, only to read and run it):
 
 | File | Role |
 |---|---|
-| `scripts/next-cycle-end.ts` | Read-only check: does any active worker's Cycle end tomorrow? Reuses the app's own `cycleWindows()` from `src/shared/settlement.ts` against `data/daybook.sqlite`. |
+| `scripts/next-cycle-end.ts` | Read-only check: does any active worker's Cycle end tomorrow? Reuses the app's own `cycleWindows()` from `src/shared/settlement.ts` against the `daybook_*` tables (`DATABASE_URL` from `.env`). |
 | `scripts/send-weekly-nudge.ps1` | Posts one ntfy message. Run weekly, unconditionally. |
 | `scripts/send-settlement-eve-ping.ps1` | Runs `next-cycle-end.ts --check` first; only posts to ntfy if it says a Cycle ends tomorrow. Run daily; no-ops most days. |
 | `scripts/register-scheduled-tasks.ps1` | Registers the two Task Scheduler jobs that call the scripts above on a schedule. **This is the one you run.** |
@@ -287,7 +306,7 @@ tomorrow for an active worker — that's the intended no-op behavior described
 in the script's own comments. To sanity-check the underlying logic directly:
 
 ```powershell
-npx tsx scripts\next-cycle-end.ts
+npx tsx --env-file-if-exists=.env scripts\next-cycle-end.ts
 ```
 
 This prints today's date, how many active workers exist, and the earliest
@@ -344,3 +363,29 @@ your setup, not something to hardcode here.
       targets the day before the earliest upcoming cycle end — Part 3.2–3.3.
 - [ ] Family onboarding note written — see above; send it once URL/topic
       are filled in.
+
+---
+
+## Appendix — one-time cutover from SQLite to Supabase (2026-09)
+
+Kept for the record. Delete this section together with
+`scripts/migrate-sqlite-to-supabase.ts` and the `better-sqlite3` devDependency
+once a full pay Cycle has been settled on Supabase.
+
+1. Apply `supabase/migrations/` to kaze-master-in. This creates the empty
+   `daybook_*` tables and doesn't affect the running SQLite app.
+2. Rehearse without committing anything:
+   `npx tsx --env-file-if-exists=.env scripts/migrate-sqlite-to-supabase.ts "<Deployments>\data\daybook.sqlite" --dry-run`
+3. **Freeze:** stop the live `npm start`. Phones get errors from here until step 6.
+4. Run the same command without `--dry-run`. It copies every table in one
+   transaction, keeping the original ids, `pin_hash` and `session_secret`,
+   then verifies identical rows and identical Settlement totals for every
+   Cycle. On any mismatch it rolls back and exits 1.
+5. Deploy the new code into Deployments, with its `.env`.
+6. `npm start`. Open the app on a phone: you should still be logged in, and
+   the current Cycle's amount should match what it showed before.
+
+**Rollback:** the script only reads the SQLite file. Stop the server,
+`git checkout bd0f461` in Deployments, and `npm start`; you're back on
+SQLite, losing only marks made since the cutover. Keep the file afterwards,
+renamed to `data/daybook.pre-supabase.sqlite`.
