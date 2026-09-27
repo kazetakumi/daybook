@@ -17,8 +17,8 @@
 //   3. move each identity sequence past the highest copied id
 //   4. verify: every table's rows are identical on both sides, and every
 //      Cycle of every Worker settles to the same total from both sources
-// Any mismatch throws and rolls the whole copy back. --dry-run does all four
-// steps, then rolls back anyway.
+// Any mismatch throws and rolls the whole copy back. --dry-run does steps 1,
+// 2 and 4, then rolls back anyway.
 //
 // The SQLite file is opened read-only and is never modified.
 
@@ -92,8 +92,9 @@ try {
       await tx`INSERT INTO ${tx(t.to)} ${tx(rows, ...t.cols)}`;
     }
 
-    // 3. Next identity value = highest copied id + 1.
-    for (const t of TABLES.filter((t) => t.identity)) {
+    // 3. Next identity value = highest copied id + 1. Skipped on --dry-run:
+    // setval() is never rolled back, so it would leak out of the rehearsal.
+    for (const t of dryRun ? [] : TABLES.filter((t) => t.identity)) {
       await tx`SELECT setval(pg_get_serial_sequence(${t.to}, 'id'), COALESCE(MAX(id), 0) + 1, false) FROM ${tx(t.to)}`;
     }
 
