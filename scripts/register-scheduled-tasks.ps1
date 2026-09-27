@@ -16,7 +16,7 @@
       before it stops being editable-for-free - see
       scripts/next-cycle-end.ts and scripts/send-settlement-eve-ping.ps1 for
       how "tomorrow" is determined (reuses the app's own cycleWindows()
-      logic against data/daybook.sqlite, read-only).
+      logic against the daybook_* tables via DATABASE_URL in .env, read-only).
 
       Design choice: rather than dynamically re-registering a fresh
       Task Scheduler trigger for each worker's next cycle end (fiddly and

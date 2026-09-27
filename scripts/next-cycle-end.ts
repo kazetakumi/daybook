@@ -9,28 +9,29 @@
 // of reimplementing Cycle-window math (stubs, start-day changes, etc.) -
 // see SPEC.md section 1.6 / section 3 for the rules this logic follows.
 //
-// Opens data/daybook.sqlite READ-ONLY (better-sqlite3 `{ readonly: true }`).
-// This script never writes to the database and never creates it.
+// Reads the daybook_* tables via DATABASE_URL (loaded from .env with
+// `tsx --env-file-if-exists=.env`) using the server's own read helpers. This script
+// only ever SELECTs - it never writes to the database.
 //
 // Usage:
-//   npx tsx scripts/next-cycle-end.ts            Human-readable report on
+//   npx tsx --env-file-if-exists=.env scripts/next-cycle-end.ts
+//                                                 Human-readable report on
 //                                                 stdout.
-//   npx tsx scripts/next-cycle-end.ts --check     Silent: exit code 0 means
+//   npx tsx --env-file-if-exists=.env scripts/next-cycle-end.ts --check
+//                                                 Silent: exit code 0 means
 //                                                 "tomorrow is a cycle end
 //                                                 for >=1 active worker, send
 //                                                 the ntfy ping"; exit code 1
 //                                                 means "skip today". Exit
 //                                                 code 2 means the database
-//                                                 doesn't exist. Intended for
+//                                                 is unreachable or not
+//                                                 configured. Intended for
 //                                                 the Task Scheduler job in
 //                                                 scripts/register-scheduled-tasks.ps1.
 
-import Database from "better-sqlite3";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { cycleWindows, type CycleConfig, type Worker } from "../src/shared/settlement";
-
-const DB_PATH = join(process.cwd(), "data", "daybook.sqlite");
+import { getDb } from "../src/server/db";
+import { listActiveWorkers, loadCycleConfigs } from "../src/server/lib/workers";
+import { cycleWindows } from "../src/shared/settlement";
 
 function todayISO(): string {
   const d = new Date();
@@ -46,66 +47,33 @@ function addDaysISO(iso: string, n: number): string {
 
 const checkMode = process.argv.includes("--check");
 
-if (!existsSync(DB_PATH)) {
-  console.error(`No database at ${DB_PATH} - nothing to check.`);
-  process.exit(2);
-}
-
-// readonly + fileMustExist: never creates or mutates the live DB, even
-// accidentally (schema.sql init in src/server/db.ts is intentionally not
-// reachable from this script).
-const db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
-
-interface WorkerRow {
-  id: number;
-  name: string;
-  role: string | null;
-  joined_on: string;
-  archived_on: string | null;
-  paid_leaves_per_cycle: number;
-}
-
-interface CycleConfigRow {
-  start_day: number;
-  effective_from: string;
-}
-
 const today = todayISO();
 const tomorrow = addDaysISO(today, 1);
 
-const workerRows = db
-  .prepare("SELECT id, name, role, joined_on, archived_on, paid_leaves_per_cycle FROM workers WHERE archived_on IS NULL")
-  .all() as WorkerRow[];
-
-const cycleConfigStmt = db.prepare("SELECT start_day, effective_from FROM cycle_configs WHERE worker_id = ? ORDER BY effective_from ASC");
-
+let activeCount = 0;
 let earliestEnd: string | null = null;
 const dueTomorrow: string[] = [];
 
-for (const row of workerRows) {
-  const worker: Worker = {
-    id: row.id,
-    name: row.name,
-    role: row.role,
-    joinedOn: row.joined_on,
-    archivedOn: row.archived_on,
-    paidLeavesPerCycle: row.paid_leaves_per_cycle,
-  };
+try {
+  const sql = getDb();
+  try {
+    const workers = await listActiveWorkers(sql);
+    activeCount = workers.length;
+    for (const worker of workers) {
+      const configs = await loadCycleConfigs(sql, worker.id);
+      if (configs.length === 0) continue; // defensive: shouldn't happen per schema invariants
 
-  const configRows = cycleConfigStmt.all(row.id) as CycleConfigRow[];
-  if (configRows.length === 0) continue; // defensive: shouldn't happen per schema invariants
-
-  const configs: CycleConfig[] = configRows.map((c) => ({
-    startDay: c.start_day,
-    effectiveFrom: c.effective_from,
-  }));
-
-  const { current } = cycleWindows(worker, configs, today);
-  if (earliestEnd === null || current.end < earliestEnd) earliestEnd = current.end;
-  if (current.end === tomorrow) dueTomorrow.push(row.name);
+      const { current } = cycleWindows(worker, configs, today);
+      if (earliestEnd === null || current.end < earliestEnd) earliestEnd = current.end;
+      if (current.end === tomorrow) dueTomorrow.push(worker.name);
+    }
+  } finally {
+    await sql.end();
+  }
+} catch (err) {
+  console.error(`Could not read the Daybook database - nothing to check. ${(err as Error).message}`);
+  process.exit(2);
 }
-
-db.close();
 
 const isSettlementEve = dueTomorrow.length > 0;
 
@@ -114,7 +82,7 @@ if (checkMode) {
 }
 
 console.log(`Today: ${today}`);
-console.log(`Active workers: ${workerRows.length}`);
+console.log(`Active workers: ${activeCount}`);
 console.log(`Earliest upcoming cycle end (of active workers' current cycles): ${earliestEnd ?? "n/a"}`);
 if (isSettlementEve) {
   console.log(`Settlement eve: YES - cycle ends tomorrow (${tomorrow}) for: ${dueTomorrow.join(", ")}`);

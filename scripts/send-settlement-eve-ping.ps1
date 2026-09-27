@@ -9,7 +9,7 @@
   is the eve of a Cycle end, when a missed Leave/Off is still cheaply fixable.
 
   This script runs scripts/next-cycle-end.ts (via tsx) in --check mode, which
-  opens data/daybook.sqlite READ-ONLY and, using the app's own cycleWindows()
+  reads the daybook_* tables (DATABASE_URL from .env) READ-ONLY and, using the app's own cycleWindows()
   logic, exits 0 if tomorrow is the current Cycle end for at least one active
   Worker, or 1 otherwise. Only on exit 0 does this script post to ntfy.
 
@@ -25,7 +25,7 @@
 
 .PARAMETER ProjectPath
   Path to the Daybook project root (where package.json, scripts/, and
-  data/daybook.sqlite live). Defaults to the parent of this script's
+  .env live). Defaults to the parent of this script's
   directory, which is correct if this file stays inside scripts/.
 
 .EXAMPLE
@@ -46,7 +46,7 @@ $ErrorActionPreference = "Stop"
 
 Push-Location $ProjectPath
 try {
-  & npx tsx (Join-Path $ProjectPath "scripts\next-cycle-end.ts") --check
+  & npx tsx --env-file-if-exists=.env (Join-Path $ProjectPath "scripts\next-cycle-end.ts") --check
   $checkExitCode = $LASTEXITCODE
 }
 finally {
@@ -74,6 +74,6 @@ elseif ($checkExitCode -eq 1) {
   exit 0
 }
 else {
-  Write-Warning "next-cycle-end.ts --check exited with code $checkExitCode (2 = database missing). Skipping ntfy ping."
+  Write-Warning "next-cycle-end.ts --check exited with code $checkExitCode (2 = database unreachable or not configured). Skipping ntfy ping."
   exit $checkExitCode
 }
