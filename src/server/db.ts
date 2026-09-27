@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import postgres from "postgres";
 import { SHARED_OK } from "../shared";
 
@@ -35,9 +36,16 @@ export function openDb(url: string, options: postgres.Options<{}> = {}): Sql {
 
 let sharedDb: Sql | undefined;
 
-/** The process-wide client, opened lazily from DATABASE_URL on first use. */
+/**
+ * The process-wide client, opened lazily from DATABASE_URL on first use. A
+ * real environment variable wins; otherwise it's read from `.env` in the
+ * working directory — here rather than via a CLI flag, because whatever
+ * launches the server (npm start, a process manager, Task Scheduler) may not
+ * pass one.
+ */
 export function getDb(): Sql {
   if (!sharedDb) {
+    if (!process.env.DATABASE_URL && existsSync(".env")) process.loadEnvFile(".env");
     const url = process.env.DATABASE_URL;
     if (!url) {
       throw new Error("DATABASE_URL is not set — copy .env.example to .env and fill it in (see docs/ops-setup.md)");
